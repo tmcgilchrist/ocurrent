@@ -24,6 +24,10 @@ let weekly = Current_cache.Schedule.v ~valid_for:(Duration.of_day 7) ()
 let pipeline ~repo () =
   let src = Git.Local.head_commit repo in
   let build ocaml_version =
+    (** TODO This errors out locally saying 
+        Result: Error: Command "docker" "pull" "ocaml/opam:debian-ocaml-4.10" exited with status 1
+        Running the command in zsh is successful?
+    *)
     let base = Docker.pull ~schedule:weekly ("ocaml/opam:debian-ocaml-" ^ ocaml_version) in
     let dockerfile =
       let+ base = base in

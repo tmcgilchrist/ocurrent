@@ -3,6 +3,7 @@ open Lwt.Infix
 module Repo_id = Repo_id
 module Api = Api
 module App = App
+module Checks = Checks  
 module Installation = Installation
 module Auth = Auth
 
@@ -31,6 +32,9 @@ let webhook = object
       | Some "installation_repositories" -> Installation.input_installation_repositories_webhook ()
       | Some "installation" -> App.input_installation_webhook ()
       | Some ("pull_request" | "push" | "create") -> Api.input_webhook body
+      (* TODO Add hook for checks to get triggered here! *)
+      | Some ("check_run" | "check_suite") -> Checks.input_webhook body
+
       | Some x -> Log.warn (fun f -> f "Unknown GitHub event type %S" x)
       | None -> Log.warn (fun f -> f "Missing GitHub event type in webhook!")
     end;

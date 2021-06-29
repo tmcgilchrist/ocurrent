@@ -190,7 +190,7 @@ let private_key_file =
   Arg.required @@
   Arg.opt Arg.(some file) None @@
   Arg.info
-    ~doc:"A file containing the GitHub app's RSA private key."
+    ~doc:"A file containing the GitHub app's RSA private key as a PEM file."
     ~docv:"PATH"
     ["github-private-key-file"]
 

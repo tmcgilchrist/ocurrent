@@ -16,7 +16,11 @@ let pool = Current.Pool.create ~label:"docker" 1
 let () = Prometheus_unix.Logging.init ()
 
 (* Link for GitHub statuses. *)
-let url = Uri.of_string "http://localhost:8080"
+(* 
+   This will be a smee server running locally that forwards the 
+   webhooks from GitHub.
+*)
+let url = Uri.of_string "http://127.0.0.1:3000/"
 
 (* Generate a Dockerfile for building all the opam packages in the build context. *)
 let dockerfile ~base =
@@ -37,7 +41,7 @@ let github_status_of_state = function
 
 let pipeline ~app () =
   let dockerfile =
-    let+ base = Docker.pull ~schedule:weekly "ocaml/opam:alpine-3.12-ocaml-4.08" in
+    let+ base = Docker.pull ~schedule:weekly "ocaml/opam:debian-10-ocaml-4.08" in
     `Contents (dockerfile ~base)
   in
   Github.App.installations app |> Current.list_iter (module Github.Installation) @@ fun installation ->

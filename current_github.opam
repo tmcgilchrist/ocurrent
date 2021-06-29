@@ -21,6 +21,7 @@ depends: [
   "duration"
   "ptime"
   "yojson"
+  "github" 
   "cohttp-lwt-unix" {< "3.0.0"}
   "mirage-crypto"
   "mirage-crypto-pk"

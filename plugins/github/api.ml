@@ -619,7 +619,7 @@ module Commit = struct
   let pp = Fmt.using snd Commit_id.pp
 
   let set_status commit context status =
-    Current.component "set_status" |>
+    Current.component "set_status" |> (* Tag this node so it appears in the visual graph in the web UI *)
     let> (t, commit) = commit
     and> status = status in
     Set_status_cache.set t {Set_status.Key.commit; context} status

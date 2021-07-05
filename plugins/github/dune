@@ -16,6 +16,7 @@
    duration
    github
    github-unix
+   github-data
    ptime
    fmt
    logs

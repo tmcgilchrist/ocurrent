@@ -181,6 +181,11 @@ let make_config app_id private_key_file allowlist =
       let installations = Installs.create ~name:"installations" (Error (`Active `Running)) in
       let t = { app_id; key; allowlist; installations } in
       Lwt.async (monitor_installations t);
+
+      (** TODO Hook here to monitor check_runs or clone this and provide as additional (in place of) cli cmdliner. *)
+      let check_suite_t = Checks.build app_id key in
+      Lwt.async (Checks.monitor_check_suites check_suite_t);
+
       t
     | Ok _ -> Fmt.failwith "Unsupported private key type" [@@warning "-11"]
 

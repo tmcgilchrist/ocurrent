@@ -34,6 +34,15 @@ module Api : sig
     val v : ?description:string -> ?url:Uri.t -> state -> t
   end
 
+  module CheckRunStatus : sig
+    type t
+    type conclusion = [`Failure of string | `Success]
+    type state = [`Queued | `InProgress | `Completed of conclusion]
+
+    (* Construct a CheckRunStatus.t *)
+    val v : ?description:string -> ?url:Uri.t -> state -> t
+  end
+
   module Commit : sig
     type t
 
@@ -61,6 +70,16 @@ module Api : sig
     val uri : t -> Uri.t
     (** [uri t] is a URI for the GitHub web page showing [t]. *)
   end
+
+
+  module CheckRun : sig
+    type t
+
+    val set_status : Commit.t Current.t -> string -> CheckRunStatus.t Current.t -> unit Current.t
+    (** [set_status commit context status] sets the status of check_run for [commit]/[context] to [status]. *)
+
+  end
+
 
   module Repo : sig
     type nonrec t = t * Repo_id.t

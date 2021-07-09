@@ -93,6 +93,44 @@ module Status = struct
   let pp f t = Fmt.string f (digest t)
 end
 
+module CheckRunStatus = struct
+  (* Sub-set of conclusions from GitHub. *)
+  type conclusion = [`Failure of string | `Success]
+  type state = [`Queued | `InProgress | `Completed of conclusion]
+  type t = {
+      state: state;
+      description: string option;
+      url: Uri.t option
+    }
+
+  let v ?description ?url state =
+    let description = Option.map (Astring.String.with_range ~len:140) description in (* Max GitHub allows *)
+    { state; description; url }
+
+  let state_to_string = function
+    | `Queued -> 
+       ["status", `String "queued"]
+    | `InProgress -> 
+       ["status", `String "inprogress"]
+    | `Completed `Success -> 
+       ["status", `String "completed"
+       ;"conclusion", `String "success"]
+    | `Completed (`Failure msg) -> 
+       ["status", `String "completed"
+       ;"conclusion", `String "failure"
+       ;"output", `Assoc [("title", `String "Failure")
+                         ;("summary", `String msg)]]
+
+  let json_items { state; description; url} =
+    state_to_string state @
+    (match description with None -> [] | Some x -> ["description", `String x]) @
+    (match url with None -> [] | Some x -> ["target_url", `String (Uri.to_string x)])
+
+  let digest t = Yojson.Safe.to_string @@ `Assoc (json_items t)
+
+  let pp f t = Fmt.string f (digest t)
+end
+
 type token = {
   token : (string, [`Msg of string]) result;
   expiry : float option;
@@ -132,6 +170,11 @@ module Commit_id = struct
     let gref = Ref.to_git id in
     Current_git.Commit_id.v ~repo ~gref ~hash
 
+  let name t =
+    match String.split_on_char '/' t.owner_name with
+    | [owner;repo_name] -> Some (owner, repo_name)
+    | _ -> None
+
   let uri t =
     Uri.make ~scheme:"https" ~host:"github.com" ~path:(Printf.sprintf "/%s/commit/%s" t.owner_name t.hash) ()
 
@@ -155,6 +198,7 @@ end
 type t = {
   account : string;          (* Prometheus label used to report points. *)
   get_token : unit -> token Lwt.t;
+  app_id : string option;
   token_lock : Lwt_mutex.t;
   mutable token : token;
   mutable head_monitors : commit Current.Monitor.t Repo_map.t;
@@ -170,15 +214,15 @@ let default_ref t = t.default_ref
 
 let all_refs t = t.all_refs
 
-let v ~get_token account =
+let v ~get_token account app_id =
   let head_monitors = Repo_map.empty in
   let refs_monitors = Repo_map.empty in
   let token_lock = Lwt_mutex.create () in
-  { get_token; token_lock; token = no_token; head_monitors; refs_monitors; account }
+  { get_token; token_lock; token = no_token; head_monitors; refs_monitors; account; app_id }
 
 let of_oauth token =
-  let get_token () = Lwt.return { token = Ok token; expiry = None } in
-  v ~get_token "oauth"
+  let get_token () = Lwt.return { token = Ok token; expiry = None} in
+  v ~get_token "oauth" None
 
 let get_token t =
   Lwt_mutex.with_lock t.token_lock @@ fun () ->
@@ -522,6 +566,106 @@ let head_of t repo id =
     | Some x -> Ok x
     | None -> Error (`Msg (Fmt.str "No such ref %a/%a" Repo_id.pp repo Ref.pp id))
 
+module CheckRun = struct
+  module Set_status = struct
+    let id = "github-check-run-set-status"
+
+    type nonrec t = t
+
+    module Key = struct
+      type t = {
+          commit : Commit_id.t;
+          context : string; 
+        }
+
+      let to_json { commit; context } =
+        `Assoc [
+            "commit", `String (Commit_id.digest commit);
+            "context", `String context
+          ]
+
+      let digest t = Yojson.Safe.to_string (to_json t)
+    end
+
+    module Value = CheckRunStatus
+
+    module Outcome = Current.Unit
+
+    let auto_cancel = true
+
+    let pp f ({ Key.commit; context }, status) =
+      Fmt.pf f "Set %a/%s to@ %a"
+        Commit_id.pp commit
+        context
+        Value.pp status
+
+    let publish t job key status =
+      Current.Job.start job ~pool ~level:Current.Level.Above_average >>= fun () ->
+      get_token t >>= function
+      | Error (`Msg m) -> Lwt.fail_with m
+      | Ok token ->
+         let token = Github.Token.of_string token in
+         let (owner, repo) = match Commit_id.name key.Key.commit with
+           | Some s -> s
+           | None -> 
+              let name = Commit_id.digest key.Key.commit in
+              Fmt.failwith "GitHub owner/repo failed: %s" name in
+         let sha = key.Key.commit.hash in
+         let app_id = t.app_id in
+         let check_name = key.Key.context in
+
+         let create_check () =
+           let open Github in
+           let body = `Assoc (("name", `String check_name) 
+                              :: ("head_sha", `String key.Key.commit.hash)
+                              :: Value.json_items status) |> Yojson.Safe.to_string in
+           Log.info (fun f -> f "create_check: %s" body);
+           Check.create_check_run ~token ~owner ~repo ~body () in
+
+         let fetch_check_run () =
+           let open Github in
+           let open Monad in
+           (* Assuming a single check_run per app/sha/check_name hence the `List.nth_opt`. *)
+           Check.list_check_runs_for_ref ~token ~owner ~repo ~sha ?app_id ~check_name () >>~ 
+           fun l -> return @@ List.nth_opt l.check_runs 0 in
+
+         let update_check_run (check_run : Github_j.check_run) () =
+           let open Github in
+           let check_run_id = Int64.to_string check_run.check_run_id in
+           let body = `Assoc (Value.json_items status) |> Yojson.Safe.to_string in
+           Log.info (fun f -> f "update_check: %s" body);
+           Check.update_check_run ~token ~owner ~repo ~check_run_id ~body () in
+
+         Lwt.try_bind ( fun () ->
+             let open Github in
+             let open Monad in                        
+             run (
+               fetch_check_run () >>= function
+               | None -> create_check ()
+               | Some check_run -> update_check_run check_run ()))
+
+           (* Ignore the response and return unit. *)
+           (fun (_ : Github_j.check_run Github.Response.t) -> Lwt_result.return ())
+           (fun ex ->
+             Log.info (fun f -> f "@[<v2>%a failed: %a@]"
+                                  pp (key, status)
+                                  Fmt.exn ex);
+             Lwt_result.fail (`Msg "Failed to set GitHub status"))
+
+  end
+
+  module Set_status_cache = Current_cache.Output(Set_status)
+
+  type t = commit
+
+  let set_status commit context status =
+    Current.component "set_check_run_status" |>
+    let> (t, commit) = commit
+    and> status = status in
+    Set_status_cache.set t {Set_status.Key.commit; context} status 
+end
+
+
 module Commit = struct
   module Set_status = struct
     let id = "github-set-status"
@@ -727,7 +871,7 @@ let token_file =
     ["github-token-file"]
 
 let make_config token_file =
-  of_oauth @@ (String.trim (read_file token_file))
+  of_oauth (String.trim (read_file token_file))
 
 let cmdliner =
   Term.(const make_config $ token_file)

@@ -8,4 +8,3 @@ type t
 val cmdliner : t Cmdliner.Term.t
 val installation : t -> account:string -> int -> Installation.t
 val installations : t -> Installation.t list Current.t
-

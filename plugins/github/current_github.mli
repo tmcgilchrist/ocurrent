@@ -1,11 +1,18 @@
 (** Integration with GitHub. *)
 
 val webhook : Current_web.Resource.t
-(** Our web-hook endpoint. This must be added to {!Current_web.routes} so that we get notified of events. *)
+(** Our web-hook endpoint. This must be added to {!Current_web.routes} so that we get notified of events. 
 
+This webhook handles the events:
+ - installation_repositories
+ - installation
+ - pull_request
+ - push
+ - create
+ *)
+
+(** Identifier for a repository hosted on GitHub. *)
 module Repo_id : sig
-  (** Identifies a repository hosted on GitHub. *)
-
   type t = {
     owner : string;
     name : string;
@@ -18,6 +25,7 @@ module Repo_id : sig
   val cmdliner : t Cmdliner.Arg.conv
 end
 
+(** Access to the GitHub API. *)
 module Api : sig
   type t
   (** Configuration for accessing GitHub. *)
@@ -32,15 +40,21 @@ module Api : sig
     type state = [`Error | `Failure | `Pending | `Success ]
 
     val v : ?description:string -> ?url:Uri.t -> state -> t
+    (** Construct a Status.t *)
   end
 
   module CheckRunStatus : sig
     type t
+    (** CheckRun status type. *)
+
     type conclusion = [`Failure of string | `Success]
+    (** Sub-set of conclusions from GitHub. 
+        Not supported are action_required, cancelled, neutral, skipped, stale, or timed_out. *)
+
     type state = [`Queued | `InProgress | `Completed of conclusion]
 
-    (* Construct a CheckRunStatus.t *)
     val v : ?description:string -> ?url:Uri.t -> state -> t
+    (** Construct a CheckRunStatus.t *)
   end
 
   module Commit : sig
@@ -71,15 +85,12 @@ module Api : sig
     (** [uri t] is a URI for the GitHub web page showing [t]. *)
   end
 
-
   module CheckRun : sig
     type t
 
     val set_status : Commit.t Current.t -> string -> CheckRunStatus.t Current.t -> unit Current.t
-    (** [set_status commit context status] sets the status of check_run for [commit]/[context] to [status]. *)
-
+    (** [set_status commit check_name status] sets the status of check_run for [commit]/[context] to [status]. *)
   end
-
 
   module Repo : sig
     type nonrec t = t * Repo_id.t
@@ -141,6 +152,7 @@ module Api : sig
   val all_refs : refs -> Commit.t Ref_map.t
   (** [all_refs refs] will return a map of all the repository's refs *)
 
+  (** Perform Anonymous request to GitHub. *)
   module Anonymous : sig
     val head_of : Repo_id.t -> Ref.t -> Current_git.Commit_id.t Current.t
     (** [head_of repo ref] is the head commit of [repo]/[ref]. No API token is used to access this,
@@ -152,6 +164,7 @@ module Api : sig
   (** Command-line options to generate a GitHub configuration. *)
 end
 
+(** Installation of a GitHub application. *)
 module Installation : sig
   type t
   (** Details about a specific installation of a GitHub app. *)
@@ -174,6 +187,7 @@ module Installation : sig
   (** Order by installation ID. *)
 end
 
+(** A GitHub Application. *)
 module App : sig
   type t
   (** Configuration for a GitHub application. *)

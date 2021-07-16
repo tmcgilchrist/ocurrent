@@ -94,7 +94,6 @@ module Status = struct
 end
 
 module CheckRunStatus = struct
-  (* Sub-set of conclusions from GitHub. *)
   type conclusion = [`Failure of string | `Success]
   type state = [`Queued | `InProgress | `Completed of conclusion]
   type t = {
@@ -214,7 +213,7 @@ let default_ref t = t.default_ref
 
 let all_refs t = t.all_refs
 
-let v ~get_token account app_id =
+let v ~get_token ?app_id account =
   let head_monitors = Repo_map.empty in
   let refs_monitors = Repo_map.empty in
   let token_lock = Lwt_mutex.create () in
@@ -222,7 +221,7 @@ let v ~get_token account app_id =
 
 let of_oauth token =
   let get_token () = Lwt.return { token = Ok token; expiry = None} in
-  v ~get_token "oauth" None
+  v ~get_token "oauth" 
 
 let get_token t =
   Lwt_mutex.with_lock t.token_lock @@ fun () ->
@@ -575,13 +574,13 @@ module CheckRun = struct
     module Key = struct
       type t = {
           commit : Commit_id.t;
-          context : string; 
+          check_name : string; 
         }
 
-      let to_json { commit; context } =
+      let to_json { commit; check_name } =
         `Assoc [
             "commit", `String (Commit_id.digest commit);
-            "context", `String context
+            "check_name", `String check_name
           ]
 
       let digest t = Yojson.Safe.to_string (to_json t)
@@ -593,10 +592,10 @@ module CheckRun = struct
 
     let auto_cancel = true
 
-    let pp f ({ Key.commit; context }, status) =
+    let pp f ({ Key.commit; check_name }, status) =
       Fmt.pf f "Set %a/%s to@ %a"
         Commit_id.pp commit
-        context
+        check_name
         Value.pp status
 
     let publish t job key status =
@@ -612,7 +611,7 @@ module CheckRun = struct
               Fmt.failwith "GitHub owner/repo failed: %s" name in
          let sha = key.Key.commit.hash in
          let app_id = t.app_id in
-         let check_name = key.Key.context in
+         let check_name = key.Key.check_name in
 
          let create_check () =
            let open Github in
@@ -658,11 +657,11 @@ module CheckRun = struct
 
   type t = commit
 
-  let set_status commit context status =
+  let set_status commit check_name status =
     Current.component "set_check_run_status" |>
     let> (t, commit) = commit
     and> status = status in
-    Set_status_cache.set t {Set_status.Key.commit; context} status 
+    Set_status_cache.set t {Set_status.Key.commit; check_name} status 
 end
 
 

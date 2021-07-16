@@ -47,7 +47,7 @@ let pipeline ~app () =
   Github.Api.Repo.ci_refs ~staleness:(Duration.of_day 90) repo
   |> Current.list_iter (module Github.Api.Commit) @@ fun head ->
   let src = Git.fetch (Current.map Github.Api.Commit.id head) in
-  Docker.build ~pool ~pull:false ~dockerfile (`Git src) 
+  Docker.build ~pool ~pull:false ~dockerfile (`Git src)
   |> Current.state
   |> Current.map github_check_run_status_of_state 
   |> Github.Api.CheckRun.set_status head program_name

@@ -37,6 +37,7 @@ let github_check_run_status_of_state = function
   | Error (`Msg m)    -> Github.Api.CheckRunStatus.v ~url (`Completed (`Failure m)) ~description:m
 
 let pipeline ~app () =
+  let token = "<token>" in
   let dockerfile =
     let+ base = Docker.pull ~schedule:weekly "ocaml/opam:alpine-3.12-ocaml-4.08" in
     `Contents (dockerfile ~base)
@@ -46,7 +47,7 @@ let pipeline ~app () =
   repos |> Current.list_iter ~collapse_key:"repo" (module Github.Api.Repo) @@ fun repo ->
   Github.Api.Repo.ci_refs ~staleness:(Duration.of_day 90) repo
   |> Current.list_iter (module Github.Api.Commit) @@ fun head ->
-  let src = Git.fetch (Current.map Github.Api.Commit.id head) in
+  let src = Git.fetch (Current.map (Github.Api.Commit.id ~token) head) in
   Docker.build ~pool ~pull:false ~dockerfile (`Git src)
   |> Current.state
   |> Current.map github_check_run_status_of_state 

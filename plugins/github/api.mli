@@ -18,7 +18,7 @@ end
 
 module Commit : sig
   type t
-  val id : t -> Current_git.Commit_id.t
+  val id : t -> token:string -> Current_git.Commit_id.t
   val repo_id : t -> Repo_id.t
   val owner_name : t -> string
   val hash : t -> string

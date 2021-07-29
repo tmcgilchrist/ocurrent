@@ -13,14 +13,19 @@ This webhook handles the events:
 
 (** Identifier for a repository hosted on GitHub. *)
 module Repo_id : sig
+  type repo_visibility = Public | Private 
+
   type t = {
     owner : string;
     name : string;
+    visibility: repo_visibility;
   }
 
   val pp : t Fmt.t
 
   val compare : t -> t -> int
+
+  val to_visibility : bool -> repo_visibility
 
   val cmdliner : t Cmdliner.Arg.conv
 end
@@ -60,7 +65,7 @@ module Api : sig
   module Commit : sig
     type t
 
-    val id : t -> Current_git.Commit_id.t
+    val id : t -> token:string -> Current_git.Commit_id.t
     (** The commit ID, which can be used to fetch it. *)
 
     val set_status : t Current.t -> string -> Status.t Current.t -> unit Current.t
@@ -228,3 +233,4 @@ module Auth : sig
   val cmdliner : t option Cmdliner.Term.t
   (** Get the configuration from the command-line. *)
 end
+

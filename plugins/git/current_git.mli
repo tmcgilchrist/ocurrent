@@ -3,7 +3,7 @@
 module Commit_id : sig
   include Set.OrderedType
 
-  val v : repo:string -> gref:string -> hash:string -> t
+  val v : repo:string -> gref:string -> hash:string -> (* visibility:string -> *) t
   (** [v ~repo ~gref ~hash] identifies a commit that can be fetched from [repo]
       using [gref] as the reference name and has hash [hash]. *)
 

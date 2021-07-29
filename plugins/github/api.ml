@@ -159,16 +159,23 @@ module Ref_map = Map.Make(Ref)
 module Commit_id = struct
   type t = {
     owner: string;
-    repo : string;    
+    repo : string;
+    visibility : Repo_id.repo_visibility;
     id : Ref.t;
     hash : string;
     committed_date : string;
   } [@@deriving to_yojson]
 
-  let to_git { owner; repo; id; hash; committed_date = _ } =
-    let repo = Fmt.str "https://github.com/%s/%s.git" owner repo in
+  let to_git { owner; repo; id; hash; committed_date = _; visibility} ~token =
+    let repo = match visibility with
+      | Public -> Fmt.str "https://github.com/%s/%s.git" owner repo
+      | Private -> Fmt.str "https://x-access-token:%s@github.com/%s/%s.git" token owner repo
+    in
     let gref = Ref.to_git id in
-    Current_git.Commit_id.v ~repo ~gref ~hash
+    (* TODO Here we construct the Current_git.Commit_id.t and need to inject the fixed url based off 
+       https://x-access-token:<token>@github.com/tmcgilchrist/ocaml-gitlab.git
+     *)
+    Current_git.Commit_id.v ~repo ~gref ~hash 
 
   let owner_name { owner; repo; _} = Fmt.str "%s/%s" owner repo 
         
@@ -177,7 +184,7 @@ module Commit_id = struct
 
   let pp_id = Ref.pp
 
-  let compare {owner; repo; id; hash; committed_date = _} b =
+  let compare {owner; repo; id; hash; committed_date = _;  visibility = _} b =
     match compare hash b.hash with
     | 0 ->
       begin match Ref.compare id b.id with
@@ -186,8 +193,8 @@ module Commit_id = struct
       end
     | x -> x
 
-  let pp f { owner; repo; id; hash; committed_date } =
-    Fmt.pf f "%s/%s@ %a@ %s@ %s" owner repo pp_id id (Astring.String.with_range ~len:8 hash) committed_date
+  let pp f { owner; repo; id; hash; committed_date; visibility } =
+    Fmt.pf f "%s/%s@ %a@ %s@ %s %s" owner repo pp_id id (Astring.String.with_range ~len:8 hash) committed_date (Repo_id.to_string visibility)
 
   let digest t = Yojson.Safe.to_string (to_yojson t)
 end
@@ -312,7 +319,7 @@ let handle_rate_limit t name json =
   Prometheus.Counter.inc (Metrics.used_points_total t.account) (float_of_int cost);
   Prometheus.Gauge.set (Metrics.remaining_points t.account) (float_of_int remaining)
 
-let get_default_ref t { Repo_id.owner; name } =
+let get_default_ref t { Repo_id.owner; name; visibility } =
     let variables = [
       "owner", `String owner;
       "name", `String name;
@@ -328,7 +335,7 @@ let get_default_ref t { Repo_id.owner; name } =
       let name = def / "name" |> to_string in
       let hash = def / "target" / "oid" |> to_string in
       let committed_date = def / "target" / "committedDate" |> to_string in
-      { Commit_id.owner; repo = name ; id = `Ref (prefix ^ name); hash; committed_date }
+      { Commit_id.owner; repo = name ; id = `Ref (prefix ^ name); hash; committed_date; visibility }
     with ex ->
       let pp f j = Yojson.Safe.pretty_print f j in
       Log.err (fun f -> f "@[<v2>Invalid JSON: %a@,%a@]" Fmt.exn ex pp json);
@@ -422,15 +429,15 @@ let query_branches_and_open_prs = {|
   }
 |}
 
-let parse_ref ~owner ~repo ~prefix json =
+let parse_ref ~owner ~repo ~prefix ~visibility json =
   let open Yojson.Safe.Util in
   let node = json / "node" in
   let name = node / "name" |> to_string in
   let hash = node / "target" / "oid" |> to_string in
   let committed_date = node / "target" / "committedDate" |> to_string in
-  { Commit_id.owner; Commit_id.repo; id = `Ref (prefix ^ name); hash; committed_date }
+  { Commit_id.owner; Commit_id.repo; id = `Ref (prefix ^ name); hash; committed_date; visibility }
 
-let parse_pr ~owner ~repo json =
+let parse_pr ~owner ~repo ~visibility json =
   let open Yojson.Safe.Util in
   let node = json / "node" in
   let hash = node / "headRefOid" |> to_string in
@@ -438,9 +445,9 @@ let parse_pr ~owner ~repo json =
   let nodes = node / "commits" / "nodes" |> to_list in
   if List.length nodes = 0 then Fmt.failwith "Failed to get latest commit for %s/%s" owner repo else
   let committed_date = List.hd nodes / "commit" / "committedDate" |> to_string in
-  { Commit_id.owner; Commit_id.repo; id = `PR pr; hash; committed_date }
+  { Commit_id.owner; Commit_id.repo; id = `PR pr; hash; committed_date; visibility }
 
-let get_refs t { Repo_id.owner; name } =
+let get_refs t { Repo_id.owner; name; visibility } =
     let variables = [
       "owner", `String owner;
       "name", `String name;
@@ -453,9 +460,9 @@ let get_refs t { Repo_id.owner; name } =
       let repo = data / "repository" in
       let default_ref = repo / "defaultBranchRef" / "name" |> to_string |> ( ^ ) "refs/heads/" in
       let refs =
-        repo / "refs" / "edges" |> to_list |> List.map (parse_ref ~owner ~repo:name ~prefix:"refs/heads/") in
+        repo / "refs" / "edges" |> to_list |> List.map (parse_ref ~owner ~repo:name ~prefix:"refs/heads/" ~visibility ) in
       let prs =
-        repo / "pullRequests" / "edges" |> to_list |> List.map (parse_pr ~owner ~repo:name) in
+        repo / "pullRequests" / "edges" |> to_list |> List.map (parse_pr ~owner ~repo:name ~visibility ) in
       (* TODO: use cursors to get all results.
          For now, we just take the first 100 and warn if there are more. *)
       let n_branches = repo / "refs" / "totalCount" |> to_int in
@@ -736,16 +743,17 @@ module Commit = struct
 
   let uri (_, commit) = Commit_id.uri commit
 
-  let id (_, commit_id) = Commit_id.to_git commit_id
+  let id (_, commit_id) ~token = Commit_id.to_git commit_id ~token
 
   let compare (_, a) (_, b) = Commit_id.compare a b
 
   let owner_name (_, id) = Commit_id.owner_name id
 
+  (* TODO Hardcoding to Public here is likely wrong! *)
   let repo_id t =
     let full = owner_name t in
     match Astring.String.cut ~sep:"/" full with
-    | Some (owner, name) -> { Repo_id.owner; name}
+    | Some (owner, name) -> { Repo_id.owner; name; visibility = Repo_id.Public }
     | None -> Fmt.failwith "Invalid owner_name %S" full
 
   let hash (_, id) = id.Commit_id.hash
@@ -781,6 +789,7 @@ module Repo = struct
     )
 
   let ci_refs ?staleness t =
+    (* TODO Here we need to get_token and embed into url? *)
     let+ refs =
       Current.component "CI refs" |>
       let> (api, repo) = t in
@@ -797,7 +806,7 @@ module Anonymous = struct
     | Some _ -> Fmt.failwith "Ref %S does not start with 'refs/'!" gref
     | None -> Fmt.failwith "Missing '/' in ref %S" gref
 
-  let query_head { Repo_id.owner; name } gref =
+  let query_head { Repo_id.owner; name; visibility = _ } gref =
     let uri = ref_endpoint ~owner ~name gref in
     Cohttp_lwt_unix.Client.get uri >>= fun (resp, body) ->
     Cohttp_lwt.Body.to_string body >|= fun body ->
@@ -818,8 +827,8 @@ module Anonymous = struct
       Lwt.try_bind
         (fun () -> query_head repo gref)
         (fun hash ->
-          let id = { Commit_id.owner = repo.owner; repo = repo.name; hash; id = gref; committed_date = "" } in
-          Lwt_result.return (Commit_id.to_git id)
+          let id = { Commit_id.owner = repo.owner; repo = repo.name; hash; id = gref; committed_date = ""; visibility = repo.visibility } in
+          Lwt_result.return (Commit_id.to_git id ~token:"") (* TODO This is an Anonymous reference so it cannot be using a ~token. *)
         )
         (fun ex ->
            Log.warn (fun f -> f "GitHub query_head failed: %a" Fmt.exn ex);

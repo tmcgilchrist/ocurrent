@@ -20,7 +20,7 @@ module Fetch = struct
   let id = "git-fetch"
 
   let build No_context job key =
-    let { Commit_id.repo = remote_repo; gref; hash = _ } = key in
+    let { Commit_id.repo = remote_repo; gref; hash = _(* ; visibility = _  *)} = key in
     let level =
       if Commit_id.is_local key then Current.Level.Harmless
       else Current.Level.Mostly_harmless
@@ -116,7 +116,7 @@ module Local = struct
     match String.trim out with
     | "" -> Error (`Msg (Fmt.str "Unknown ref %S" gref))
     | hash ->
-      let id = { Commit_id.repo = Fpath.to_string t.repo; gref; hash } in
+      let id = { Commit_id.repo = Fpath.to_string t.repo; gref; hash(* ; visibility = Public  *)} in
       Ok { Commit.repo = t.repo; id }
 
   let make_monitor t gref =
@@ -182,7 +182,7 @@ module Local = struct
     | Ok contents ->
       let open Astring in (* (from ocaml-git) *)
       match String.cuts ~sep:" " (String.trim contents) with
-      | [hash] -> Ok (`Commit {Commit_id.repo = Fpath.to_string repo; gref = "HEAD"; hash})
+      | [hash] -> Ok (`Commit {Commit_id.repo = Fpath.to_string repo; gref = "HEAD"; hash(* ; visibility = Public *)})
       | [_;r]  -> Ok (`Ref r)
       | _      -> Error (`Msg (Fmt.str "Can't parse HEAD %S" contents))
 

@@ -62,8 +62,9 @@ let list_repositories ~api ~token ~account =
         |> List.map (fun r ->
             let name = r |> member "name" |> to_string in
             let archived = r |> member "archived" |> to_bool in
+            let visibility = r |> member "private" |> to_bool |> Repo_id.to_visibility in
             let metadata = { archived } in
-            (api, Repo_id.{ owner = account; name }), metadata
+            (api, Repo_id.{ owner = account; name; visibility}), metadata
           )
       in
       begin match next (Cohttp.Response.headers resp) with

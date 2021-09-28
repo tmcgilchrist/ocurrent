@@ -1,0 +1,56 @@
+module Status : sig
+  type t
+  type state = [ `Cancelled | `Failure | `Pending | `Running | `Success ]
+  val v : name:string -> ?description:string -> ?url:Uri.t -> state -> t
+end
+
+module Commit : sig
+  type t
+  val id : t -> Current_git.Commit_id.t
+  val repo_id : t -> Repo_id.t
+  val owner_name : t -> string
+  val hash : t -> string
+  val committed_date : t -> string
+  val pp : t Fmt.t
+  val compare : t -> t -> int
+  val set_status : t Current.t -> string -> Status.t Current.t -> unit Current.t
+  val uri : t -> Uri.t
+end
+
+module Ref : sig
+  type t = [ `PR of int | `Ref of string ]
+  val compare : t -> t -> int
+  val pp : t Fmt.t
+  val to_git : t -> string
+end
+
+module Ref_map : Map.S with type key = Ref.t
+
+type t
+type refs
+
+val of_oauth : token:string -> webhook_secret:string -> t
+val head_commit : t -> Repo_id.t -> Commit.t Current.t
+(* val refs : t -> Repo_id.t -> refs Current.Primitive.t *)
+val default_ref : refs -> string
+val webhook_secret : t -> string
+val cmdliner : t Cmdliner.Term.t
+val webhook_secret_file : string Cmdliner.Term.t
+
+(* Private API *)
+type token = {
+  token : (string, [`Msg of string]) result;
+  (** A token to include in the "Authorization" header, or an error if we failed to get a token. *)
+
+  expiry : float option;
+  (** [token] is valid until this time.
+      If [token] is an [Error] then this is the earliest time to try again.
+      If [None], [token] does not expire. *)
+}
+
+val get_token : t -> (string, [`Msg of string]) result Lwt.t
+(** [get_token t] returns the cached token for [t], or fetches a new one if it has expired. *)
+
+val input_webhook : Gitlab_t.webhook -> unit
+
+val v : get_token:(unit -> token Lwt.t) -> account:string -> webhook_secret:string -> unit -> t

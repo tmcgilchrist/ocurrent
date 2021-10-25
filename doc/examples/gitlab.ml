@@ -22,7 +22,8 @@ let dockerfile ~base =
   add ~src:["*.opam"] ~dst:"/src/" () @@
   run "opam install . --show-actions --deps-only -t | awk '/- install/{print $3}' | xargs opam depext -iy" @@
   copy ~src:["."] ~dst:"/src/" () @@
-  run "opam install -tv ."
+  run "opam exec -- dune build @install @check @runtest"
+  (* run "opam install -tv ." *)
 
 let weekly = Current_cache.Schedule.v ~valid_for:(Duration.of_day 7) ()
 

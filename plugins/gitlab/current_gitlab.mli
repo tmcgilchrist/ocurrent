@@ -71,7 +71,39 @@ module Api : sig
 
   end
 
+  module Ref : sig
+    type t = [ `Ref of string | `PR of int ]
+
+    val pp : t Fmt.t
+
+    val compare : t -> t -> int
+
+    val to_git : t -> string
+    (** [to_git t] is the Git-format string of the ref, e.g."refs/pull/%d/head" *)
+  end
+
+  module Ref_map : Map.S with type key = Ref.t
+
   val head_commit : t -> Repo_id.t -> Commit.t Current.t
+  (** [head_commit t repo] evaluates to the commit at the head of the default branch in [repo]. *)
+
+  (* val ci_refs : ?staleness:Duration.t -> t -> Repo_id.t -> Commit.t list Current.t *)
+  (** [ci_refs t repo] evaluates to the list of branches and open PRs in [repo], excluding gh-pages.
+      @param staleness If given, commits older than this are excluded.
+                       Note: the main branch commit is always included, even if stale. *)
+
+  (* val refs : t -> Repo_id.t -> refs Current.Primitive.t *)
+  (** [refs t repo] is the primitive for all the references in [repo].
+      This is the low-level API for getting the refs.
+      It is used internally by [ci_refs] and [head_of] but in some cases you may want to use it directly,
+      [default_ref] and [all_refs] will expose useful information for you.
+      The result is cached (so calling it twice will return the same primitive). *)
+
+  val default_ref : refs -> string
+  (** [default_ref refs] will return the full name of the repository's default branch ref *)
+
+  (* val all_refs : refs -> Commit.t Ref_map.t *)
+  (** [all_refs refs] will return a map of all the repository's refs *)
 
   val cmdliner : t Cmdliner.Term.t
   (** Command-line options to generate a GitLab configuration. *)

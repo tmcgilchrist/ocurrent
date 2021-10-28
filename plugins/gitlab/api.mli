@@ -37,6 +37,16 @@ val webhook_secret : t -> string
 val cmdliner : t Cmdliner.Term.t
 val webhook_secret_file : string Cmdliner.Term.t
 
+module Repo : sig
+  type nonrec t = t * Repo_id.t
+
+  val id : t -> Repo_id.t
+  val ci_refs : ?staleness:Duration.t -> t Current.t -> Commit.t list Current.t
+  val head_commit : t Current.t -> Commit.t Current.t
+  val pp : t Fmt.t
+  val compare : t -> t -> int
+end
+
 (* Private API *)
 type token = {
   token : (string, [`Msg of string]) result;

@@ -297,7 +297,6 @@ module Commit = struct
               let open Gitlab in
               let open Monad in
               let token = Token.of_string token in
-              (* TODO Fill in these values! *)
               let sha = commit.Commit_id.hash in
               let* project = Project.by_name ~token ~owner:commit.owner ~name:commit.repo () >>~ fun x -> return (List.hd x) in
               Project.Commit.status ~token ~project_id:project.Gitlab_t.project_short_id ~sha ~state:(state_to_gitlab status.Status.state) ~name:id ()
@@ -343,6 +342,129 @@ module Commit = struct
     and> status = status in
     Set_status_cache.set t {Set_status.Key.commit; context} status
 end
+
+(* TODO Build this up as a REST Query, then try to optimise to GraphQL. 
+*)
+let query_branches token =
+  let open Gitlab in
+  let open Monad in
+  let project_id = 29798678 in
+  let* merge_requests = Project.merge_requests ~token ~id:project_id ~state:`Opened () in
+  and* branches = Project.
+  
+
+(* TODO REST or GraphQL to retrieve all git refs for a Repository. *)
+let get_refs _t { Repo_id.owner=_; name=_ } =
+  
+  let add xs map = List.fold_left (fun acc x -> Ref_map.add x.Commit_id.id (t, x) acc) map xs in
+  Ref_map.empty
+  |> add refs
+  |> add prs
+  |> fun all_refs -> { default_ref; all_refs }
+
+let make_refs_monitor t repo =
+  let read () =
+    Lwt.catch
+      (fun () -> get_refs t repo >|= Stdlib.Result.ok)
+      (fun ex -> Lwt_result.fail @@ `Msg (Fmt.str "GitHub query for %a failed: %a" Repo_id.pp repo Fmt.exn ex))
+  in
+  let watch refresh =
+    let owner_name = Printf.sprintf "%s/%s" repo.owner repo.name in
+    let rec aux x =
+      x >>= fun () ->
+      let x = await_event ~owner_name in
+      refresh ();
+      Lwt_unix.sleep 10.0 >>= fun () ->   (* Limit updates to 1 per 10 seconds *)
+      aux x
+    in
+    let x = await_event ~owner_name in
+    let thread =
+      Lwt.catch
+        (fun () -> aux x)
+        (function
+         | Lwt.Canceled -> Lwt.return_unit  (* (could clear metrics here) *)
+         | ex -> Log.err (fun f -> f "refs thread failed: %a" Fmt.exn ex); Lwt.return_unit
+        )
+    in
+    Lwt.return (fun () -> Lwt.cancel thread; Lwt.return_unit)
+  in
+  let pp f = Fmt.pf f "Watch %a CI refs" Repo_id.pp repo in
+  Current.Monitor.create ~read ~watch ~pp
+
+let refs t repo =
+  Current.Monitor.get (
+      match Repo_map.find_opt repo t.refs_monitors with
+      | Some i -> i
+      | None ->
+         let i = make_refs_monitor t repo in
+         t.refs_monitors <- Repo_map.add repo i t.refs_monitors;
+         i
+    )
+
+let to_ptime str =
+  Ptime.of_rfc3339 str |> function
+  | Ok (t, _, _) -> t
+  | Error (`RFC3339 (_, e)) -> Fmt.failwith "%a" Ptime.pp_rfc3339_error e
+
+let remove_stale ?staleness ~default_ref refs =
+  match staleness with
+  | None -> refs
+  | Some staleness ->
+     let cutoff = Unix.gettimeofday () -. Duration.to_f staleness in
+     let active x =
+       let committed = Ptime.to_float_s (to_ptime x.Commit_id.committed_date) in
+       committed > cutoff
+     in
+     let is_default = function
+       | { Commit_id.id = `Ref t; _ } -> String.equal default_ref t
+       | _ -> false
+     in
+     List.filter (fun (_, x) -> is_default x || active x) refs
+
+
+let to_ci_refs ?staleness refs =
+  refs.all_refs
+  |> Ref_map.bindings
+  |> List.map snd
+  |> remove_stale ?staleness ~default_ref:refs.default_ref
+
+let ci_refs ?staleness t repo =
+  let+ refs =
+    Current.component "%a CI refs" Repo_id.pp repo |>
+      let> () = Current.return () in
+      refs t repo
+  in
+  to_ci_refs ?staleness refs
+
+
+module Repo = struct
+  type nonrec t = t * Repo_id.t
+
+  let id = snd
+  let pp = Fmt.using id Repo_id.pp
+  let compare a b = Repo_id.compare (id a) (id b)
+
+  let head_commit t =
+    Current.component "head" |>
+      let> (api, repo) = t in
+      Current.Monitor.get (
+          match Repo_map.find_opt repo api.head_monitors with
+          | Some i -> i
+          | None ->
+             let i = make_head_commit_monitor api repo in
+             api.head_monitors <- Repo_map.add repo i api.head_monitors;
+             i
+        )
+
+  let ci_refs ?staleness t =
+    let+ refs =
+      Current.component "CI refs" |>
+        let> (api, repo) = t in
+        refs api repo
+    in
+    to_ci_refs ?staleness refs
+end
+
 (* TODO oauth token for api requests. *)
 
 open Cmdliner

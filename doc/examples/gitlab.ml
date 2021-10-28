@@ -23,7 +23,6 @@ let dockerfile ~base =
   run "opam install . --show-actions --deps-only -t | awk '/- install/{print $3}' | xargs opam depext -iy" @@
   copy ~src:["."] ~dst:"/src/" () @@
   run "opam exec -- dune build @install @check @runtest"
-  (* run "opam install -tv ." *)
 
 let weekly = Current_cache.Schedule.v ~valid_for:(Duration.of_day 7) ()
 
@@ -32,8 +31,9 @@ let github_status_of_state = function
   | Error (`Active _) -> Gitlab.Api.Status.v ~url `Pending ~name:program_name
   | Error (`Msg m)    -> Gitlab.Api.Status.v ~url `Failure ~description:m ~name:program_name
 
-let pipeline ~github ~repo () =
-  let head = Gitlab.Api.head_commit github repo in
+let pipeline ~github ~repo_id () =
+  Gitlab.Api.ci_refs github ~staleness:(Duration.of_day 90) repo_id
+  |> Current.list_iter (module Gitlab.Api.Commit) @@ fun head ->
   let src = Git.fetch (Current.map Gitlab.Api.Commit.id head) in
   let dockerfile =
     let+ base = Docker.pull ~schedule:weekly "ocaml/opam:alpine-3.13-ocaml-4.12" in
@@ -46,7 +46,7 @@ let pipeline ~github ~repo () =
 
 let main config mode github repo =
   let has_role = Current_web.Site.allow_all in
-  let engine = Current.Engine.create ~config (pipeline ~github ~repo) in
+  let engine = Current.Engine.create ~config (pipeline ~github ~repo_id:repo) in
   let routes =
     Routes.(s "webhooks" / s "gitlab" /? nil @--> Gitlab.webhook ~engine ~webhook_secret:(Gitlab.Api.webhook_secret github) ~has_role) ::
     Current_web.routes engine

@@ -103,7 +103,7 @@ module Api : sig
   val head_commit : t -> Repo_id.t -> Commit.t Current.t
   (** [head_commit t repo] evaluates to the commit at the head of the default branch in [repo]. *)
 
-  (* val ci_refs : ?staleness:Duration.t -> t -> Repo_id.t -> Commit.t list Current.t *)
+  val ci_refs : ?staleness:Duration.t -> t -> Repo_id.t -> Commit.t list Current.t
   (** [ci_refs t repo] evaluates to the list of branches and open PRs in [repo], excluding gh-pages.
       @param staleness If given, commits older than this are excluded.
                        Note: the main branch commit is always included, even if stale. *)

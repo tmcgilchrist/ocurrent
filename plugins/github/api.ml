@@ -369,27 +369,29 @@ let exec_graphql ?variables t query =
                    body);
       Fmt.failwith "Error performing GraphQL query on GitHub: %s" (Cohttp.Code.string_of_status err)
 
-let query_default =
-  "query($owner: String!, $name: String!) { \
-   rateLimit { \
-     cost \
-     remaining \
-     resetAt \
-   } \
-   repository(owner: $owner, name: $name) { \
-     nameWithOwner \n
-     defaultBranchRef { \
-       prefix \
-       name \
-       target { \
-         ...on Commit { \
-           oid \
-           committedDate \
-         } \
-       } \
-     } \
-   } \
- }"
+let query_default = {|
+  query ($owner: String!, $name: String!) {
+    rateLimit {
+      cost
+      remaining
+      resetAt
+    }
+    repository(owner: $owner, name: $name) {
+      nameWithOwner
+      defaultBranchRef {
+        prefix
+        name
+        target {
+          ... on Commit {
+            oid
+            committedDate
+          }
+        }
+      }
+    }
+  }
+|}
+
 
 let handle_rate_limit t name json =
   let open Yojson.Safe.Util in

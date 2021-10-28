@@ -343,9 +343,24 @@ module Commit = struct
     Set_status_cache.set t {Set_status.Key.commit; context} status
 end
 
-(* REST or GraphQL to retrieve all git refs for a Repository. *)
+(* TODO Build this up as a REST Query, then try to optimise to GraphQL. 
+*)
+let query_branches token =
+  let open Gitlab in
+  let open Monad in
+  let project_id = 29798678 in
+  let* merge_requests = Project.merge_requests ~token ~id:project_id ~state:`Opened () in
+  and* branches = Project.
+  
+
+(* TODO REST or GraphQL to retrieve all git refs for a Repository. *)
 let get_refs _t { Repo_id.owner=_; name=_ } =
-  Lwt.return {default_ref = ""; all_refs = Ref_map.empty}
+  
+  let add xs map = List.fold_left (fun acc x -> Ref_map.add x.Commit_id.id (t, x) acc) map xs in
+  Ref_map.empty
+  |> add refs
+  |> add prs
+  |> fun all_refs -> { default_ref; all_refs }
 
 let make_refs_monitor t repo =
   let read () =
@@ -412,6 +427,15 @@ let to_ci_refs ?staleness refs =
   |> Ref_map.bindings
   |> List.map snd
   |> remove_stale ?staleness ~default_ref:refs.default_ref
+
+let ci_refs ?staleness t repo =
+  let+ refs =
+    Current.component "%a CI refs" Repo_id.pp repo |>
+      let> () = Current.return () in
+      refs t repo
+  in
+  to_ci_refs ?staleness refs
+
 
 module Repo = struct
   type nonrec t = t * Repo_id.t

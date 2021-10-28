@@ -34,6 +34,7 @@ val head_commit : t -> Repo_id.t -> Commit.t Current.t
 (* val refs : t -> Repo_id.t -> refs Current.Primitive.t *)
 val default_ref : refs -> string
 val webhook_secret : t -> string
+val ci_refs : ?staleness:Duration.t -> t -> Repo_id.t -> Commit.t list Current.t
 val cmdliner : t Cmdliner.Term.t
 val webhook_secret_file : string Cmdliner.Term.t
 

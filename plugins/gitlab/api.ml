@@ -343,24 +343,57 @@ module Commit = struct
     Set_status_cache.set t {Set_status.Key.commit; context} status
 end
 
-(* TODO Build this up as a REST Query, then try to optimise to GraphQL. 
+(* TODO Build this up as a REST Query, then try to optimise to GraphQL.
 *)
-let query_branches token =
+(* type query_result = { *)
+(*   default_branch: Gitlab_t.branch_full; *)
+(*   branches: Gitlab_t.branch_full list; *)
+(*   merge_requests: Gitlab_t.merge_request list; *)
+(* } *)
+
+let query_branches token owner name =
   let open Gitlab in
   let open Monad in
-  let project_id = 29798678 in
-  let* merge_requests = Project.merge_requests ~token ~id:project_id ~state:`Opened () in
-  and* branches = Project.
-  
+  Project.by_name ~token ~owner ~name () >>~ fun projects ->
+  let project = List.hd projects in
+  let* merge_requests = Project.merge_requests ~token ~id:project.project_short_id ~state:`Opened () |> Stream.to_list in
+  let* branches = Project.branches ~token ~project_id:project.project_short_id () |> Stream.to_list in
+  let+ default_branch = return (List.find (fun branch -> branch.Gitlab_j.branch_full_default) branches) in
+  (default_branch, branches, merge_requests)
+
+let exec_query token owner name =
+  let token = Gitlab.Token.of_string token in
+  Gitlab.Monad.run (query_branches token owner name)
+
+let parse_ref ~owner ~repo ~prefix (branch : Gitlab_t.branch_full) : Commit_id.t =
+  let hash = branch.branch_full_commit.commit_id in
+  let committed_date = branch.branch_full_commit.commit_committed_date in
+  let name = branch.branch_full_name in
+  { Commit_id.owner; Commit_id.repo; id = `Ref (prefix ^ name); hash; committed_date}
+  (* TODO Not clear how `Ref and `PR get used. *)
+
+let parse_pr ~owner ~repo (mr : Gitlab_t.merge_request) : Commit_id.t =
+  let hash = mr.merge_request_sha in
+  let pr = mr.merge_request_iid in
+  let committed_date = Option.value ~default:"2021-10-18T00:45:00.145Z" mr.merge_request_updated_at in
+  (* TODO updated_at isn't the time of the sha commit, we need extra calls to retrieve that.
+     For now fill with nonsense data.
+  *)
+  { Commit_id.owner; Commit_id.repo; id = `PR pr; hash; committed_date }
 
 (* TODO REST or GraphQL to retrieve all git refs for a Repository. *)
-let get_refs _t { Repo_id.owner=_; name=_ } =
-  
-  let add xs map = List.fold_left (fun acc x -> Ref_map.add x.Commit_id.id (t, x) acc) map xs in
-  Ref_map.empty
-  |> add refs
-  |> add prs
-  |> fun all_refs -> { default_ref; all_refs }
+let get_refs t { Repo_id.owner; name} =
+  get_token t >>= function
+  | Error (`Msg m) -> Lwt.fail_with m
+  | Ok token -> exec_query token owner name >|= fun (default_branch, branches, prs) ->
+    let refs = List.map (parse_ref ~owner ~repo:name ~prefix:"refs/heads/") branches in
+    let prs = List.map (parse_pr ~owner ~repo:name) prs in
+    let default_ref = default_branch.Gitlab_t.branch_full_name in
+    let add xs map = List.fold_left (fun acc x -> Ref_map.add x.Commit_id.id (t, x) acc) map xs in
+    Ref_map.empty
+    |> add refs
+    |> add prs
+    |> fun all_refs -> { default_ref; all_refs }
 
 let make_refs_monitor t repo =
   let read () =

@@ -9,6 +9,9 @@ module Git = Current_git
 module Gitlab = Current_gitlab
 module Docker = Current_docker.Default
 
+(* Limit to one (or two) build at a time. *)
+let pool = Current.Pool.create ~label:"docker" 2
+
 let () = Prometheus_unix.Logging.init ()
 
 (* Link for GitLab statuses. *)
@@ -22,7 +25,7 @@ let dockerfile ~base =
   add ~src:["*.opam"] ~dst:"/src/" () @@
   run "opam install . --show-actions --deps-only -t | awk '/- install/{print $3}' | xargs opam depext -iy" @@
   copy ~src:["."] ~dst:"/src/" () @@
-  run "opam exec -- dune build @install @check @runtest"
+  run "opam install -tv ."
 
 let weekly = Current_cache.Schedule.v ~valid_for:(Duration.of_day 7) ()
 
@@ -32,17 +35,18 @@ let github_status_of_state = function
   | Error (`Msg m)    -> Gitlab.Api.Status.v ~url `Failure ~description:m ~name:program_name
 
 let pipeline ~github ~repo_id () =
+  let dockerfile =
+    let+ base = Docker.pull ~schedule:weekly "ocaml/opam:alpine-3.13-ocaml-4.08" in
+    `Contents (dockerfile ~base)
+  in
   Gitlab.Api.ci_refs github ~staleness:(Duration.of_day 90) repo_id
   |> Current.list_iter (module Gitlab.Api.Commit) @@ fun head ->
   let src = Git.fetch (Current.map Gitlab.Api.Commit.id head) in
-  let dockerfile =
-    let+ base = Docker.pull ~schedule:weekly "ocaml/opam:alpine-3.13-ocaml-4.12" in
-    `Contents (dockerfile ~base)
-  in
-  Docker.build ~pull:false ~dockerfile (`Git src)
+
+  Docker.build ~pool ~pull:false ~dockerfile (`Git src)
   |> Current.state
   |> Current.map github_status_of_state
-  |> Gitlab.Api.Commit.set_status head "ocurrent"
+  |> Gitlab.Api.Commit.set_status head program_name
 
 let main config mode github repo =
   let has_role = Current_web.Site.allow_all in

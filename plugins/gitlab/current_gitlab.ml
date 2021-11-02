@@ -39,7 +39,6 @@ let webhook ~engine:_ ~webhook_secret ~has_role:_ = object
       | true ->
          begin match event with
          | Some "Merge Request Hook" ->
-            (* TODO Process the webhook here *)
             Api.input_webhook (Gitlab_j.webhook_of_string body)
          | Some x -> Log.warn (fun f -> f "Unknown GitHub event type %S" x)
          | None -> Log.warn (fun f -> f "Missing GitHub event type in webhook!")

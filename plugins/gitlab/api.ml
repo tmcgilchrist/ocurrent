@@ -7,6 +7,10 @@ let pool = Current.Pool.create ~label:"gitlab" 1
 (* When we get a webhook event, we fire the condition for that repository `owner/name`, if any. *)
 let webhook_cond = Hashtbl.create 10
 
+(* TODO Optional argument to support different GitLab instances*)
+let gitlab_host = "gitlab.com"
+let gitlab_scheme = "https"
+
 let input_webhook (body : Gitlab_t.webhook) =
   match body with
   | `MergeRequest mr ->
@@ -15,7 +19,6 @@ let input_webhook (body : Gitlab_t.webhook) =
      | Some cond -> Lwt_condition.broadcast cond ()
      | None -> Log.info (fun f -> f "Got webhook event for %S, but we're not interested in that" owner_name))
   | _-> Log.info (fun f -> f "Got webhook event we're not interested in.")
-
 
 let read_file path =
   let ch = open_in_bin path in
@@ -26,6 +29,7 @@ let read_file path =
     )
     ~finally:(fun () -> close_in ch)
 
+(* TODO Rework how we get a token. *)
 type token = {
   token : (string, [`Msg of string]) result;
   expiry : float option;
@@ -96,14 +100,14 @@ module Commit_id = struct
   } [@@deriving to_yojson]
 
   let to_git { owner; repo; id; hash; committed_date = _ } =
-    let repo = Fmt.str "https://gitlab.com/%s/%s.git" owner repo in
+    let repo = Fmt.str "%s//%s/%s/%s.git" gitlab_scheme gitlab_host owner repo in
     let gref = Ref.to_git id in
     Current_git.Commit_id.v ~repo ~gref ~hash
 
   let owner_name { owner; repo; _} = Fmt.str "%s/%s" owner repo
 
   let uri t =
-    Uri.make ~scheme:"https" ~host:"gitlab.com" ~path:(Printf.sprintf "/%s/%s/-/commit/%s" t.owner t.repo t.hash) ()
+    Uri.make ~scheme:gitlab_scheme ~host:gitlab_host ~path:(Printf.sprintf "/%s/%s/-/commit/%s" t.owner t.repo t.hash) ()
 
   let pp_id = Ref.pp
 
@@ -140,6 +144,8 @@ and refs = {
 let webhook_secret t = t.webhook_secret
 
 let default_ref t = t.default_ref
+
+let all_refs t = t.all_refs
 
 let v ~get_token ~account ~webhook_secret () =
   let head_monitors = Repo_map.empty in
@@ -230,7 +236,6 @@ let make_head_commit_monitor t repo =
   let pp f = Fmt.pf f "Watch %a default ref head" Repo_id.pp repo in
   Current.Monitor.create ~read ~watch ~pp
 
-
 let head_commit t repo =
   Current.component "%a head" Repo_id.pp repo |>
   let> () = Current.return () in
@@ -299,7 +304,9 @@ module Commit = struct
               let token = Token.of_string token in
               let sha = commit.Commit_id.hash in
               let* project = Project.by_name ~token ~owner:commit.owner ~name:commit.repo () >>~ fun x -> return (List.hd x) in
-              Project.Commit.status ~token ~project_id:project.Gitlab_t.project_short_id ~sha ~state:(state_to_gitlab status.Status.state) ~name:id ()
+              Project.Commit.status ~token ~project_id:project.Gitlab_t.project_short_id ~sha
+                ~state:(state_to_gitlab status.Status.state) ~name:id
+                ?target_url:(Option.map (fun x -> Uri.to_string x) status.Status.url) ()
               >>~ fun resp -> return (resp))
           )
           (fun (_ : Gitlab_t.commit_status) -> Lwt_result.return ())
@@ -351,6 +358,56 @@ end
 (*   merge_requests: Gitlab_t.merge_request list; *)
 (* } *)
 
+(* See https://gitlab.com/-/graphql-explorer *)
+(* let query_merge_requests_branch = {| *)
+(* # Query rootRef, branches and all open merge requests *)
+(* query default_and_merge_requests($name: ID!) { *)
+
+(*   project(fullPath: $name) { *)
+(*     name *)
+(*     nameWithNamespace *)
+(*     id *)
+(*     repository { *)
+(*       rootRef *)
+(*       branchNames(searchPattern: "*", offset:0, limit:100) *)
+(*     } *)
+
+(*     mergeRequests(state:opened) { *)
+(*       count *)
+(*       edges { *)
+(*         node { *)
+(*           state *)
+(*           iid *)
+(*           targetBranch *)
+(*           sourceBranch *)
+(*           diffHeadSha *)
+(*           commitsWithoutMergeCommits(first:1) { *)
+(*             nodes { *)
+(*               sha *)
+(*               authoredDate *)
+(*             } *)
+(*           } *)
+(*         } *)
+(*       } *)
+(*     } *)
+(*   } *)
+(* } *)
+
+(* # Query a particular branch's last commit, with authoredDate *)
+(* query branch_commits($name: ID!, $branch: String) { *)
+(*   project(fullPath: $name) { *)
+(*     repository { *)
+(*       tree(ref:$branch) { *)
+(*         lastCommit { *)
+(*         sha *)
+(*         authoredDate *)
+(*       } *)
+(*       } *)
+(*     } *)
+(*   } *)
+(* } *)
+(* |} *)
+
 let query_branches token owner name =
   let open Gitlab in
   let open Monad in
@@ -370,14 +427,12 @@ let parse_ref ~owner ~repo ~prefix (branch : Gitlab_t.branch_full) : Commit_id.t
   let committed_date = branch.branch_full_commit.commit_committed_date in
   let name = branch.branch_full_name in
   { Commit_id.owner; Commit_id.repo; id = `Ref (prefix ^ name); hash; committed_date}
-  (* TODO Not clear how `Ref and `PR get used. *)
 
 let parse_pr ~owner ~repo (mr : Gitlab_t.merge_request) : Commit_id.t =
   let hash = mr.merge_request_sha in
   let pr = mr.merge_request_iid in
-  let committed_date = Option.value ~default:"2021-10-18T00:45:00.145Z" mr.merge_request_updated_at in
+  let committed_date = mr.merge_request_updated_at in
   (* TODO updated_at isn't the time of the sha commit, we need extra calls to retrieve that.
-     For now fill with nonsense data.
   *)
   { Commit_id.owner; Commit_id.repo; id = `PR pr; hash; committed_date }
 

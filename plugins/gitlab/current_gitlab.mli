@@ -15,6 +15,7 @@ To trigger events this MUST be added to {! Current_web.routes }. This webhook ha
 
 *)
 
+(** Identifier for a repository hosted on GitLab. *)
 module Repo_id : sig
   type t = { owner : string; name : string }
 
@@ -31,11 +32,14 @@ module Api : sig
   (** Configuration for accessing GitLab. *)
 
   val webhook_secret : t -> string
+  (** Webhook secret to validate payloads from GitLab *)
 
   type refs
+  (** Reference information for the repository *)
 
   module Status : sig
     type t
+    (** GitLab commit context status type. *)
 
     type state = [`Cancelled | `Failure | `Running | `Pending | `Success ]
 
@@ -108,7 +112,7 @@ module Api : sig
       @param staleness If given, commits older than this are excluded.
                        Note: the main branch commit is always included, even if stale. *)
 
-  (* val refs : t -> Repo_id.t -> refs Current.Primitive.t *)
+  val refs : t -> Repo_id.t -> refs Current.Primitive.t
   (** [refs t repo] is the primitive for all the references in [repo].
       This is the low-level API for getting the refs.
       It is used internally by [ci_refs] and [head_of] but in some cases you may want to use it directly,
@@ -118,9 +122,11 @@ module Api : sig
   val default_ref : refs -> string
   (** [default_ref refs] will return the full name of the repository's default branch ref *)
 
-  (* val all_refs : refs -> Commit.t Ref_map.t *)
+  val all_refs : refs -> Commit.t Ref_map.t
   (** [all_refs refs] will return a map of all the repository's refs *)
 
   val cmdliner : t Cmdliner.Term.t
   (** Command-line options to generate a GitLab configuration. *)
 end
+
+(** TODO Use GitLab to authenticate users. *)

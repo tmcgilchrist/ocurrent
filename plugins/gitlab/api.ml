@@ -100,7 +100,7 @@ module Commit_id = struct
   } [@@deriving to_yojson]
 
   let to_git { owner; repo; id; hash; committed_date = _ } =
-    let repo = Fmt.str "%s//%s/%s/%s.git" gitlab_scheme gitlab_host owner repo in
+    let repo = Fmt.str "%s://%s/%s/%s.git" gitlab_scheme gitlab_host owner repo in
     let gref = Ref.to_git id in
     Current_git.Commit_id.v ~repo ~gref ~hash
 

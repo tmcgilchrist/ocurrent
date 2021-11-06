@@ -100,7 +100,7 @@ module Commit_id = struct
   } [@@deriving to_yojson]
 
   let to_git { owner; repo; id; hash; committed_date = _ } =
-    let repo = Fmt.str "%s//%s/%s/%s.git" gitlab_scheme gitlab_host owner repo in
+    let repo = Fmt.str "%s://%s/%s/%s.git" gitlab_scheme gitlab_host owner repo in
     let gref = Ref.to_git id in
     Current_git.Commit_id.v ~repo ~gref ~hash
 
@@ -190,8 +190,8 @@ let await_event ~owner_name =
 let get_commit repo_owner repo_name =
   let open Gitlab in
   let open Monad in
-  Project.by_name ~owner:repo_owner ~name:repo_name () >>~ fun projects ->
-  let project = List.hd projects in
+  Group.Project.by_name ~owner:repo_owner ~name:repo_name () >>~ fun projects ->
+  let project = List.find (fun x -> Eqaf.equal x.Gitlab_t.project_short_name repo_name) projects in
   Project.Commit.commits ~project_id:project.Gitlab_t.project_short_id ~ref_name:project.project_short_default_branch ()
   |> Stream.to_list
   >|= fun x -> (List.hd x, project.project_short_default_branch)
@@ -411,10 +411,10 @@ end
 let query_branches token owner name =
   let open Gitlab in
   let open Monad in
-  Project.by_name ~token ~owner ~name () >>~ fun projects ->
-  let project = List.hd projects in
+  Group.Project.by_name ~token ~owner ~name () >>~ fun projects ->
+  let project = List.find (fun x -> Eqaf.equal x.Gitlab_t.project_short_name name) projects in
   let* merge_requests = Project.merge_requests ~token ~id:project.project_short_id ~state:`Opened () |> Stream.to_list in
-  let* branches = Project.branches ~token ~project_id:project.project_short_id () |> Stream.to_list in
+  let* branches = Project.Branch.branches ~token ~project_id:project.project_short_id () |> Stream.to_list in
   let+ default_branch = return (List.find (fun branch -> branch.Gitlab_j.branch_full_default) branches) in
   (default_branch, branches, merge_requests)
 

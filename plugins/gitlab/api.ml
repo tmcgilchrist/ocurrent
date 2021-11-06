@@ -191,7 +191,7 @@ let get_commit repo_owner repo_name =
   let open Gitlab in
   let open Monad in
   Group.Project.by_name ~owner:repo_owner ~name:repo_name () >>~ fun projects ->
-  let project = List.hd projects in
+  let project = List.find (fun x -> Eqaf.equal x.Gitlab_t.project_short_name repo_name) projects in
   Project.Commit.commits ~project_id:project.Gitlab_t.project_short_id ~ref_name:project.project_short_default_branch ()
   |> Stream.to_list
   >|= fun x -> (List.hd x, project.project_short_default_branch)
@@ -412,7 +412,7 @@ let query_branches token owner name =
   let open Gitlab in
   let open Monad in
   Group.Project.by_name ~token ~owner ~name () >>~ fun projects ->
-  let project = List.hd projects in
+  let project = List.find (fun x -> Eqaf.equal x.Gitlab_t.project_short_name name) projects in
   let* merge_requests = Project.merge_requests ~token ~id:project.project_short_id ~state:`Opened () |> Stream.to_list in
   let* branches = Project.branches ~token ~project_id:project.project_short_id () |> Stream.to_list in
   let+ default_branch = return (List.find (fun branch -> branch.Gitlab_j.branch_full_default) branches) in

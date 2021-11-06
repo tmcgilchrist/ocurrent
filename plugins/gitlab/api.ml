@@ -190,7 +190,7 @@ let await_event ~owner_name =
 let get_commit repo_owner repo_name =
   let open Gitlab in
   let open Monad in
-  Project.by_name ~owner:repo_owner ~name:repo_name () >>~ fun projects ->
+  Group.Project.by_name ~owner:repo_owner ~name:repo_name () >>~ fun projects ->
   let project = List.hd projects in
   Project.Commit.commits ~project_id:project.Gitlab_t.project_short_id ~ref_name:project.project_short_default_branch ()
   |> Stream.to_list
@@ -411,7 +411,7 @@ end
 let query_branches token owner name =
   let open Gitlab in
   let open Monad in
-  Project.by_name ~token ~owner ~name () >>~ fun projects ->
+  Group.Project.by_name ~token ~owner ~name () >>~ fun projects ->
   let project = List.hd projects in
   let* merge_requests = Project.merge_requests ~token ~id:project.project_short_id ~state:`Opened () |> Stream.to_list in
   let* branches = Project.branches ~token ~project_id:project.project_short_id () |> Stream.to_list in

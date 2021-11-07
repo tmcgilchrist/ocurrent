@@ -193,8 +193,10 @@ let get_commit repo_owner repo_name =
   Group.Project.by_name ~owner:repo_owner ~name:repo_name () >>~ fun projects ->
   let project = List.find (fun x -> Eqaf.equal x.Gitlab_t.project_short_name repo_name) projects in
   Project.Commit.commits ~project_id:project.Gitlab_t.project_short_id ~ref_name:project.project_short_default_branch ()
-  |> Stream.to_list
-  >|= fun x -> (List.hd x, project.project_short_default_branch)
+  |> Stream.next
+  >|= fun x ->
+  Option.map (fun (x,_) -> (x, project.project_short_default_branch)) x |> Option.get
+  (* TODO Handle error gracefully here *)
 
 (* Get latest Git ref for the default branch in GitLab? *)
 (* TODO Handle rate limiting? via get_token t >>= use token *)

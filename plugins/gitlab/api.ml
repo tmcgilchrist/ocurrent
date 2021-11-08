@@ -85,7 +85,7 @@ module Ref = struct
 
   let to_git = function
     | `Ref head -> head
-    | `PR id -> Fmt.str "merge_requests/%d" id
+    | `PR id -> Fmt.str "refs/pull/%d/head" id
 end
 
 module Ref_map = Map.Make(Ref)
@@ -553,6 +553,65 @@ module Repo = struct
         refs api repo
     in
     to_ci_refs ?staleness refs
+end
+
+module Anonymous = struct
+
+  let query_head { Repo_id.owner; name } gref =
+    let cmd =
+      let open Gitlab in
+      let open Monad in
+      Project.by_name ~owner ~name () >>~ fun projects ->
+      let project = List.find (fun x -> Eqaf.equal x.Gitlab_t.project_short_name name) projects in
+      let project_id = project.Gitlab_t.project_short_id in
+      match gref with
+      | `Ref the_ref ->
+        Project.Commit.commits ~project_id ~ref_name:(the_ref) () |> Stream.next
+        >|= fun x -> Option.map (fun (x,_) -> x.Gitlab_t.commit_id) x |> Option.get
+      | `PR pr_no ->
+        Project.merge_request ~project_id ~merge_request_iid:(string_of_int pr_no) () >>~ fun x ->
+        return x.Gitlab_t.merge_request_sha
+    in
+    Gitlab.Monad.run cmd
+
+  let head_of (repo : Repo_id.t) gref =
+    let owner_name = Printf.sprintf "%s/%s" repo.owner repo.name in
+    let read () =
+      Lwt.try_bind
+        (fun () -> query_head repo gref)
+        (fun hash ->
+          let id = { Commit_id.owner = repo.owner; repo = repo.name; hash; id = gref; committed_date = "" } in
+          Lwt_result.return (Commit_id.to_git id)
+        )
+        (fun ex ->
+           Log.warn (fun f -> f "GitHub query_head failed: %a" Fmt.exn ex);
+           Lwt_result.fail (`Msg (Fmt.str "Failed to get head of %a:%a" Repo_id.pp repo Ref.pp gref))
+        )
+    in
+    let watch refresh =
+      let rec aux x =
+        x >>= fun () ->
+        let x = await_event ~owner_name in
+        refresh ();
+        Lwt_unix.sleep 10.0 >>= fun () ->   (* Limit updates to 1 per 10 seconds *)
+        aux x
+      in
+      let x = await_event ~owner_name in
+      let thread =
+        Lwt.catch
+          (fun () -> aux x)
+          (function
+            | Lwt.Canceled -> Lwt.return_unit
+            | ex -> Log.err (fun f -> f "Anonymous.head thread failed: %a" Fmt.exn ex); Lwt.return_unit
+          )
+      in
+      Lwt.return (fun () -> Lwt.cancel thread; Lwt.return_unit)
+    in
+    let pp f = Fmt.pf f "Query head of %a:%a" Repo_id.pp repo Ref.pp gref in
+    let monitor = Current.Monitor.create ~read ~watch ~pp in
+    Current.component "%a:%a" Repo_id.pp repo Ref.pp gref |>
+    let> () = Current.return () in
+    Current.Monitor.get monitor
 end
 
 (* TODO oauth token for api requests. *)

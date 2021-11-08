@@ -49,6 +49,10 @@ module Repo : sig
   val compare : t -> t -> int
 end
 
+module Anonymous : sig
+  val head_of : Repo_id.t -> Ref.t -> Current_git.Commit_id.t Current.t
+end
+
 (* Private API *)
 type token = {
   token : (string, [`Msg of string]) result;

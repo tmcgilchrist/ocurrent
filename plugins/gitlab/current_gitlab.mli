@@ -125,6 +125,14 @@ module Api : sig
   val all_refs : refs -> Commit.t Ref_map.t
   (** [all_refs refs] will return a map of all the repository's refs *)
 
+  (** Perform Anonymous request to GitLab. *)
+  module Anonymous : sig
+    val head_of : Repo_id.t -> Ref.t -> Current_git.Commit_id.t Current.t
+    (** [head_of repo ref] is the head commit of [repo]/[ref]. No API token is used to access this,
+        so it only works for public repositories. You are responsible for adding a web-hook so
+        that [input_webhook] gets called whenever the commit changes. *)
+  end
+
   val cmdliner : t Cmdliner.Term.t
   (** Command-line options to generate a GitLab configuration. *)
 end

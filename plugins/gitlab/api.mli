@@ -67,6 +67,9 @@ type token = {
 val get_token : t -> (string, [`Msg of string]) result Lwt.t
 (** [get_token t] returns the cached token for [t], or fetches a new one if it has expired. *)
 
-val input_webhook : Gitlab_t.webhook -> unit
+type webhooks_accepted = [`MergeRequest of Gitlab_t.merge_request_webhook 
+                         | `Push of Gitlab_t.push_webhook]
+
+val input_webhook : webhooks_accepted -> unit
 
 val v : get_token:(unit -> token Lwt.t) -> account:string -> webhook_secret:string -> unit -> t

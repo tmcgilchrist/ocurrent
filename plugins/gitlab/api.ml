@@ -7,18 +7,24 @@ let pool = Current.Pool.create ~label:"gitlab" 1
 (* When we get a webhook event, we fire the condition for that repository `owner/name`, if any. *)
 let webhook_cond = Hashtbl.create 10
 
-(* TODO Optional argument to support different GitLab instances*)
-let gitlab_host = "gitlab.com"
-let gitlab_scheme = "https"
+exception Project_not_found of int
+exception Commit_not_found
 
-let input_webhook (body : Gitlab_t.webhook) =
+type webhooks_accepted =
+  [ `MergeRequest of Gitlab_t.merge_request_webhook
+  | `Push of Gitlab_t.push_webhook
+  ]
+
+let input_webhook (body : webhooks_accepted) =
+  let update owner_name = match Hashtbl.find_opt webhook_cond owner_name with
+      | Some cond -> Lwt_condition.broadcast cond ()
+      | None -> Log.info (fun f -> f "Got webhook event for %S, but we're not interested in that" owner_name)
+  in
   match body with
   | `MergeRequest mr ->
-    let owner_name = mr.merge_request_webhook_project.project_webhook_path_with_namespace in
-    (match Hashtbl.find_opt webhook_cond owner_name with
-     | Some cond -> Lwt_condition.broadcast cond ()
-     | None -> Log.info (fun f -> f "Got webhook event for %S, but we're not interested in that" owner_name))
-  | _-> Log.info (fun f -> f "Got webhook event we're not interested in.")
+    update mr.merge_request_webhook_project.project_webhook_path_with_namespace
+  | `Push p ->
+    update  p.push_webhook_project.project_webhook_path_with_namespace
 
 let read_file path =
   let ch = open_in_bin path in
@@ -38,8 +44,8 @@ type token = {
 let no_token = {
   token = Error (`Msg "Not fetched yet");
   expiry = Some (-1.0);
-
 }
+
 module Repo_map = Map.Make(Repo_id)
 
 module Status = struct
@@ -92,36 +98,38 @@ module Ref_map = Map.Make(Ref)
 
 module Commit_id = struct
   type t = {
-    owner: string;
-    repo : string;
+    (* owner: string; *)
+    (* repo : string; *)
+    repo : Repo_id.t;
     id : Ref.t;
     hash : string;
     committed_date : string;
   } [@@deriving to_yojson]
 
-  let to_git { owner; repo; id; hash; committed_date = _ } =
-    let repo = Fmt.str "%s://%s/%s/%s.git" gitlab_scheme gitlab_host owner repo in
+  let to_git { repo; id; hash; committed_date = _ } =
+    (* TODO Optional argument to support different GitLab instances*)
+    let repo = Fmt.str "https://gitlab.com/%a.git" Repo_id.to_git repo in
     let gref = Ref.to_git id in
     Current_git.Commit_id.v ~repo ~gref ~hash
 
-  let owner_name { owner; repo; _} = Fmt.str "%s/%s" owner repo
+  let owner_name { repo; _} = Fmt.str "%a" Repo_id.to_git repo
 
   let uri t =
-    Uri.make ~scheme:gitlab_scheme ~host:gitlab_host ~path:(Printf.sprintf "/%s/%s/-/commit/%s" t.owner t.repo t.hash) ()
+    Uri.make ~scheme:"https" ~host:"gitlab.com" ~path:(Fmt.str "/%a/-/commit/%s" Repo_id.to_git t.repo t.hash) ()
 
   let pp_id = Ref.pp
 
-  let compare {owner; repo; id; hash; committed_date = _} b =
+  let compare {repo; id; hash; committed_date = _} b =
     match compare hash b.hash with
     | 0 ->
       begin match Ref.compare id b.id with
-        | 0 -> compare (owner, repo) (b.owner, b.repo)
+        | 0 -> Repo_id.compare repo b.repo
         | x -> x
       end
     | x -> x
 
-  let pp f { owner; repo; id; hash; committed_date } =
-    Fmt.pf f "%s/%s@ %a@ %s@ %s" owner repo pp_id id (Astring.String.with_range ~len:8 hash) committed_date
+  let pp f { repo; id; hash; committed_date } =
+    Fmt.pf f "%a@ %a@ %s@ %s" Repo_id.to_git repo pp_id id (Astring.String.with_range ~len:8 hash) committed_date
 
   let digest t = Yojson.Safe.to_string (to_yojson t)
 end
@@ -187,27 +195,31 @@ let await_event ~owner_name =
   in
   Lwt_condition.wait cond
 
-let get_commit repo_owner repo_name =
+let get_commit project_id =
   let open Gitlab in
   let open Monad in
-  Group.Project.by_name ~owner:repo_owner ~name:repo_name () >>~ fun projects ->
-  let project = List.find (fun x -> Eqaf.equal x.Gitlab_t.project_short_name repo_name) projects in
-  Project.Commit.commits ~project_id:project.Gitlab_t.project_short_id ~ref_name:project.project_short_default_branch ()
-  |> Stream.next
-  >|= fun x ->
-  Option.map (fun (x,_) -> (x, project.project_short_default_branch)) x |> Option.get
-  (* TODO Handle error gracefully here *)
+  Project.by_id ~project_id () >>~ function
+  | None ->
+    fail (Project_not_found project_id)
+  | Some project ->
+    Project.Commit.commits ~project_id:project.Gitlab_t.project_short_id ~ref_name:project.project_short_default_branch ()
+    |> Stream.next
+    >|= fun x ->
+    Option.map (fun (x,_) -> (x, project.project_short_default_branch)) x
+    |> function
+    | None -> raise Commit_not_found
+    | Some x -> x
 
 (* Get latest Git ref for the default branch in GitLab? *)
 (* TODO Handle rate limiting? via get_token t >>= use token *)
-let get_default_ref _t { Repo_id.owner = repo_owner; name = repo_name } =
+let get_default_ref _t (repo_id : Repo_id.t) =
   let prefix = "refs/heads/" in
-  Gitlab.Monad.run (get_commit repo_owner repo_name) >>= fun (c, branch_name) ->
+  Gitlab.Monad.run (get_commit repo_id.project_id) >>= fun (c, branch_name) ->
   (* Get the first commit, which should be the latest one on that branch. ie the default branch. *)
-  Lwt.return { Commit_id.owner = repo_owner
-         ; repo = repo_name; id = `Ref (prefix ^ branch_name)
-         ; hash = c.commit_id
-         ; committed_date = c.commit_created_at }
+  Lwt.return { Commit_id.repo = repo_id
+             ; id = `Ref (prefix ^ branch_name)
+             ; hash = c.commit_id
+             ; committed_date = c.commit_created_at }
 
 let make_head_commit_monitor t repo =
   let read () =
@@ -216,7 +228,7 @@ let make_head_commit_monitor t repo =
       (fun ex -> Lwt_result.fail @@ `Msg (Fmt.str "GitLab query for %a failed: %a" Repo_id.pp repo Fmt.exn ex))
   in
   let watch refresh =
-    let owner_name = Printf.sprintf "%s/%s" repo.owner repo.name in
+    let owner_name = Fmt.str "%a" Repo_id.to_git repo in
     let rec aux x =
       x >>= fun () ->
       let x = await_event ~owner_name in
@@ -284,7 +296,6 @@ module Commit = struct
         context
         Value.pp status
 
-    (* TODO Store Project_id along with owner/project_name. GitLab is oriented around project_ids *)
     let publish t job key (status : Value.t) =
       let state_to_gitlab = function
         | `Cancelled -> `Cancelled
@@ -294,7 +305,7 @@ module Commit = struct
         | `Success -> `Success in
 
       Current.Job.start job ~pool ~level:Current.Level.Above_average >>= fun () ->
-      let {Key.commit; context=_} = key in
+      let { Key.commit; context=_ } = key in
       get_token t >>= function
       | Error (`Msg m) -> Lwt.fail_with m
       | Ok token ->
@@ -305,19 +316,18 @@ module Commit = struct
               let open Monad in
               let token = Token.of_string token in
               let sha = commit.Commit_id.hash in
-              let* project = Project.by_name ~token ~owner:commit.owner ~name:commit.repo () >>~ fun x -> return (List.hd x) in
-              Project.Commit.status ~token ~project_id:project.Gitlab_t.project_short_id ~sha
+              let project_id = commit.repo.project_id in
+              Project.Commit.status ~token ~project_id ~sha
                 ~state:(state_to_gitlab status.Status.state) ~name:id
-                ?target_url:(Option.map (fun x -> Uri.to_string x) status.Status.url) ()
-              >>~ fun resp -> return (resp))
+                ?target_url:(Option.map Uri.to_string status.Status.url) ()
+              >>~ fun resp -> return resp)
           )
           (fun (_ : Gitlab_t.commit_status) -> Lwt_result.return ())
           (fun ex ->
                Log.err (fun f -> f "@[<v2>%a failed: %a@]"
                             pp (key, status)
                             Fmt.exn ex);
-               let s = Fmt.str "%a" Fmt.exn ex in
-               Lwt_result.fail (`Msg ("Failed to set GitLab status " ^ s))
+               Lwt_result.fail (`Msg (Fmt.str "Failed to set GitLab status %a" Fmt.exn ex))
           )
   end
 
@@ -333,11 +343,7 @@ module Commit = struct
 
   let owner_name (_, id) = Commit_id.owner_name id
 
-  let repo_id t =
-    let full = owner_name t in
-    match Astring.String.cut ~sep:"/" full with
-    | Some (owner, name) -> { Repo_id.owner; name }
-    | None -> Fmt.failwith "Invalid owner_name %S" full
+  let repo_id ((_,t) : 'a * Commit_id.t) : Repo_id.t = t.Commit_id.repo
 
   let hash (_, id) = id.Commit_id.hash
 
@@ -410,41 +416,40 @@ end
 (* } *)
 (* |} *)
 
-let query_branches token owner name =
+let query_branches token project_id =
   let open Gitlab in
   let open Monad in
-  Group.Project.by_name ~token ~owner ~name () >>~ fun projects ->
-  let project = List.find (fun x -> Eqaf.equal x.Gitlab_t.project_short_name name) projects in
-  let* merge_requests = Project.merge_requests ~token ~id:project.project_short_id ~state:`Opened () |> Stream.to_list in
-  let* branches = Project.Branch.branches ~token ~project_id:project.project_short_id () |> Stream.to_list in
+  let* merge_requests = Project.merge_requests ~token ~id:project_id ~state:`Opened () |> Stream.to_list in
+  let* branches = Project.Branch.branches ~token ~project_id () |> Stream.to_list in
   let+ default_branch = return (List.find (fun branch -> branch.Gitlab_j.branch_full_default) branches) in
   (default_branch, branches, merge_requests)
 
-let exec_query token owner name =
+let exec_query token project_id =
   let token = Gitlab.Token.of_string token in
-  Gitlab.Monad.run (query_branches token owner name)
+  Gitlab.Monad.run (query_branches token project_id)
 
-let parse_ref ~owner ~repo ~prefix (branch : Gitlab_t.branch_full) : Commit_id.t =
+let parse_ref ~repo ~prefix (branch : Gitlab_t.branch_full) : Commit_id.t =
   let hash = branch.branch_full_commit.commit_id in
   let committed_date = branch.branch_full_commit.commit_committed_date in
   let name = branch.branch_full_name in
-  { Commit_id.owner; Commit_id.repo; id = `Ref (prefix ^ name); hash; committed_date}
+  { Commit_id.repo; id = `Ref (prefix ^ name); hash; committed_date}
 
-let parse_pr ~owner ~repo (mr : Gitlab_t.merge_request) : Commit_id.t =
+let parse_merge_request ~repo (mr : Gitlab_t.merge_request) : Commit_id.t =
   let hash = mr.merge_request_sha in
   let pr = mr.merge_request_iid in
   let committed_date = mr.merge_request_updated_at in
-  (* TODO updated_at isn't the time of the sha commit, we need extra calls to retrieve that.
+  (* TODO merge_request_updated_at as a proxy for most recent git activity.
+     This isn't totally accurate but we would need extra calls to retrieve that.
   *)
-  { Commit_id.owner; Commit_id.repo; id = `PR pr; hash; committed_date }
+  { Commit_id.repo; id = `PR pr; hash; committed_date }
 
-(* TODO REST or GraphQL to retrieve all git refs for a Repository. *)
-let get_refs t { Repo_id.owner; name} =
+let get_refs t (repo : Repo_id.t) =
   get_token t >>= function
   | Error (`Msg m) -> Lwt.fail_with m
-  | Ok token -> exec_query token owner name >|= fun (default_branch, branches, prs) ->
-    let refs = List.map (parse_ref ~owner ~repo:name ~prefix:"refs/heads/") branches in
-    let prs = List.map (parse_pr ~owner ~repo:name) prs in
+  | Ok token -> exec_query token repo.project_id >|= fun (default_branch, branches, prs) ->
+    let prefix = "refs/heads/" in
+    let refs = List.map (parse_ref ~repo ~prefix) branches in
+    let prs = List.map (parse_merge_request ~repo) prs in
     let default_ref = default_branch.Gitlab_t.branch_full_name in
     let add xs map = List.fold_left (fun acc x -> Ref_map.add x.Commit_id.id (t, x) acc) map xs in
     Ref_map.empty
@@ -459,7 +464,7 @@ let make_refs_monitor t repo =
       (fun ex -> Lwt_result.fail @@ `Msg (Fmt.str "GitHub query for %a failed: %a" Repo_id.pp repo Fmt.exn ex))
   in
   let watch refresh =
-    let owner_name = Printf.sprintf "%s/%s" repo.owner repo.name in
+    let owner_name = Fmt.str "%a" Repo_id.to_git repo in
     let rec aux x =
       x >>= fun () ->
       let x = await_event ~owner_name in
@@ -526,7 +531,6 @@ let ci_refs ?staleness t repo =
   in
   to_ci_refs ?staleness refs
 
-
 module Repo = struct
   type nonrec t = t * Repo_id.t
 
@@ -557,13 +561,11 @@ end
 
 module Anonymous = struct
 
-  let query_head { Repo_id.owner; name } gref =
+  let query_head (repo : Repo_id.t) gref =
     let cmd =
       let open Gitlab in
       let open Monad in
-      Project.by_name ~owner ~name () >>~ fun projects ->
-      let project = List.find (fun x -> Eqaf.equal x.Gitlab_t.project_short_name name) projects in
-      let project_id = project.Gitlab_t.project_short_id in
+      let project_id = repo.project_id in
       match gref with
       | `Ref the_ref ->
         Project.Commit.commits ~project_id ~ref_name:(the_ref) () |> Stream.next
@@ -575,12 +577,12 @@ module Anonymous = struct
     Gitlab.Monad.run cmd
 
   let head_of (repo : Repo_id.t) gref =
-    let owner_name = Printf.sprintf "%s/%s" repo.owner repo.name in
+    let owner_name = Fmt.str "%a" Repo_id.to_git repo in
     let read () =
       Lwt.try_bind
         (fun () -> query_head repo gref)
         (fun hash ->
-          let id = { Commit_id.owner = repo.owner; repo = repo.name; hash; id = gref; committed_date = "" } in
+          let id = { Commit_id.repo; hash; id = gref; committed_date = "" } in
           Lwt_result.return (Commit_id.to_git id)
         )
         (fun ex ->
@@ -615,7 +617,6 @@ module Anonymous = struct
 end
 
 (* TODO oauth token for api requests. *)
-
 open Cmdliner
 
 let token_file =

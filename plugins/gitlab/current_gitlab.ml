@@ -38,8 +38,12 @@ let webhook ~engine:_ ~webhook_secret ~has_role:_ = object
          Cohttp_lwt_unix.Server.respond_string ~status:`Unauthorized ~body:"Invalid X-Gitlab-Token" ()
       | true ->
          begin match event with
-         | Some "Merge Request Hook" ->
-            Api.input_webhook (Gitlab_j.webhook_of_string body)
+         | Some "Merge Request Hook" | Some "Push Hook" ->
+           let a = Gitlab_j.webhook_of_string body in
+           (match a with
+            | `MergeRequest _ as x -> Api.input_webhook x
+            | `Push _ as x -> Api.input_webhook x
+            | x -> Log.warn (fun f -> f "Unknown GitHub event type %S" (Gitlab_j.string_of_webhook x)))
          | Some x -> Log.warn (fun f -> f "Unknown GitHub event type %S" x)
          | None -> Log.warn (fun f -> f "Missing GitHub event type in webhook!")
          end;

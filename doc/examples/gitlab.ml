@@ -71,7 +71,7 @@ let repo =
   Arg.required @@
   Arg.pos 0 (Arg.some Gitlab.Repo_id.cmdliner) None @@
   Arg.info
-    ~doc:"The GitLab repository (owner/name) to monitor."
+    ~doc:"The GitLab repository (owner/name/project_id) to monitor."
     ~docv:"REPO"
     []
 

@@ -17,7 +17,7 @@ To trigger events this MUST be added to {! Current_web.routes }. This webhook ha
 
 (** Identifier for a repository hosted on GitLab. *)
 module Repo_id : sig
-  type t = { owner : string; name : string }
+  type t = { owner : string; name : string; project_id : int }
 
   val pp : t Fmt.t
 

@@ -98,8 +98,6 @@ module Ref_map = Map.Make(Ref)
 
 module Commit_id = struct
   type t = {
-    (* owner: string; *)
-    (* repo : string; *)
     repo : Repo_id.t;
     id : Ref.t;
     hash : string;
@@ -340,8 +338,6 @@ module Commit = struct
   let id (_, commit_id) = Commit_id.to_git commit_id
 
   let compare (_, a) (_, b) = Commit_id.compare a b
-
-  let owner_name (_, id) = Commit_id.owner_name id
 
   let repo_id ((_,t) : 'a * Commit_id.t) : Repo_id.t = t.Commit_id.repo
 

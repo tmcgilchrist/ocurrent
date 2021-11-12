@@ -1,4 +1,3 @@
-(* TODO Duplicate of GitHub, can we or should we share this module? *)
 type t = {
   owner : string;
   name : string;

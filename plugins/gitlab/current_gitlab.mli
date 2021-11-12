@@ -1,7 +1,4 @@
-(** Integration with GitLab.
-
-https://docs.gitlab.com/ee/user/project/integrations/webhooks.html
-*)
+(** Integration with GitLab {{:https://docs.gitlab.com/ee/user/project/integrations/webhooks.html}Webhooks}. *)
 
 val webhook : engine:Current.Engine.t
               -> webhook_secret:string
@@ -12,18 +9,27 @@ val webhook : engine:Current.Engine.t
 To trigger events this MUST be added to {! Current_web.routes }. This webhook handles the events:
 
  - Merge request
+ - Push
 
+See {{:https://docs.gitlab.com/ee/user/project/integrations/webhook_events.html}webhook events} for
+a full list of possible events.
 *)
 
-(** Identifier for a repository hosted on GitLab. *)
+(** Identifier for a Project's repository hosted on GitLab. *)
 module Repo_id : sig
-  type t = { owner : string; name : string; project_id : int }
+  type t = { owner : string
+           ; name : string
+           ; project_id : int
+           }
 
   val pp : t Fmt.t
 
   val compare : t -> t -> int
 
   val cmdliner : t Cmdliner.Arg.conv
+  (** Cmdliner parser for reading a repo_id as a string.
+      Expected format is "owner/name/project_id"
+  *)
 end
 
 (** Access to the GitLab API. *)
@@ -32,25 +38,29 @@ module Api : sig
   (** Configuration for accessing GitLab. *)
 
   val webhook_secret : t -> string
-  (** Webhook secret to validate payloads from GitLab *)
+  (** Webhook secret to validate payloads from GitLab. *)
 
   type refs
-  (** Reference information for the repository *)
+  (** Reference information for the Repository. *)
 
+  (** Status associated with an single [Commit.t]. *)
   module Status : sig
     type t
     (** GitLab commit context status type. *)
 
     type state = [`Cancelled | `Failure | `Running | `Pending | `Success ]
+    (** All possible Commit states in GitLab. *)
 
     val v : name:string -> ?description:string -> ?url:Uri.t -> state -> t
+    (** Create [t] with an optional [?url] and [?description] to associate with the displayed status in GitLab.*)
   end
 
+  (** A specific Git commit. *)
   module Commit : sig
     type t
 
     val id : t -> Current_git.Commit_id.t
-    (** The commit ID, which can be used to fetch it. *)
+    (** Identifier for a specific Git commit, which can be used to fetch it. *)
 
     val set_status : t Current.t -> string -> Status.t Current.t -> unit Current.t
     (** [set_status commit context status] sets the status of [commit]/[context] to [status]. *)
@@ -59,22 +69,24 @@ module Api : sig
     (** [owner_name t] is the "owner/name" string identifying the repository. *)
 
     val repo_id : t -> Repo_id.t
-    (** Like [owner_name], but as a [Repo_id.t]. *)
+    (** Construct a [Repo_id.t] that [t] belongs to. *)
 
     val hash : t -> string
     (** [hash t] is the Git commit hash of [t]. *)
 
     val committed_date : t -> string
-    (** [committed_date t] is the datetime when [t] was committed *)
+    (** [committed_date t] is the datetime when [t] was committed. *)
 
     val pp : t Fmt.t
+    (** Pretty print [t]. *)
+
     val compare : t -> t -> int
 
     val uri : t -> Uri.t
     (** [uri t] is a URI for the GitLab web page showing [t]. *)
-
   end
 
+  (** A Project's repository on GitLab. *)
   module Repo : sig
     type nonrec t = t * Repo_id.t
 
@@ -83,7 +95,7 @@ module Api : sig
     val compare : t -> t -> int
 
     val ci_refs : ?staleness:Duration.t -> t Current.t -> Commit.t list Current.t
-    (** [ci_refs t] evaluates to the list of branches and open PRs in [t], excluding gh-pages.
+    (** [ci_refs t] evaluates to the list of branches and open PRs in [t].
         @param staleness If given, commits older than this are excluded.
                          Note: the main branch commit is always included, even if stale. *)
 
@@ -91,11 +103,12 @@ module Api : sig
     (** [head_commit t] evaluates to the commit at the head of the default branch in [t]. *)
   end
 
+  (** A Ref as an indirect way of referring to a commit. *)
   module Ref : sig
     type t = [ `Ref of string | `PR of int ]
+    (** Ref is either a regular git ref or a MergeRequest. *)
 
     val pp : t Fmt.t
-
     val compare : t -> t -> int
 
     val to_git : t -> string
@@ -108,7 +121,7 @@ module Api : sig
   (** [head_commit t repo] evaluates to the commit at the head of the default branch in [repo]. *)
 
   val ci_refs : ?staleness:Duration.t -> t -> Repo_id.t -> Commit.t list Current.t
-  (** [ci_refs t repo] evaluates to the list of branches and open PRs in [repo], excluding gh-pages.
+  (** [ci_refs t repo] evaluates to the list of branches and open PRs in [repo].
       @param staleness If given, commits older than this are excluded.
                        Note: the main branch commit is always included, even if stale. *)
 
@@ -136,5 +149,3 @@ module Api : sig
   val cmdliner : t Cmdliner.Term.t
   (** Command-line options to generate a GitLab configuration. *)
 end
-
-(** TODO Use GitLab to authenticate users. *)

@@ -34,7 +34,6 @@ let webhook ~engine:_ ~webhook_secret ~has_role:_ = object
       match validate_webhook webhook_secret headers with
       | false ->
          Log.warn (fun f -> f "Invalid GitLab Webhook received!");
-
          Cohttp_lwt_unix.Server.respond_string ~status:`Unauthorized ~body:"Invalid X-Gitlab-Token" ()
       | true ->
          begin match event with

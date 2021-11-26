@@ -26,6 +26,38 @@ let input_webhook (body : webhooks_accepted) =
   | `Push p ->
     update  p.push_webhook_project.project_webhook_path_with_namespace
 
+
+module Metrics = struct
+  open Prometheus
+  let namespace = "ocurrent"
+  let subsystem = "gitlab"
+
+  let refs_total =
+    let help = "Total number of monitored branches" in
+    Gauge.v_labels ~label_names:["account"; "name"] ~help ~namespace ~subsystem "refs_total"
+
+  let prs_total =
+    let help = "Total number of monitored PRs" in
+    Gauge.v_labels ~label_names:["account"; "name"] ~help ~namespace ~subsystem "prs_total"
+end
+
+(* GitLab responds with 429 Too Many Requests *)
+(* HTTP Headers on responses of: *)
+(* < ratelimit-observed: 3
+   < ratelimit-remaining: 1997
+   < ratelimit-reset: 1636698938
+   < ratelimit-resettime: Fri, 12 Nov 2021 06:35:38 GMT
+   < ratelimit-limit: 2000
+*)
+(* let handle_rate_limit t name json = *)
+(*   let open Yojson.Safe.Util in *)
+(*   let cost = json / "cost" |> to_int in *)
+(*   let remaining = json / "remaining" |> to_int in *)
+(*   let reset_at = json / "resetAt" |> to_string in *)
+(*   Log.info (fun f -> f "GraphQL(%s): cost:%d remaining:%d resetAt:%s" name cost remaining reset_at); *)
+(*   Prometheus.Counter.inc (Metrics.used_points_total t.account) (float_of_int cost); *)
+(*   Prometheus.Gauge.set (Metrics.remaining_points t.account) (float_of_int remaining) *)
+
 let read_file path =
   let ch = open_in_bin path in
   Fun.protect
@@ -91,7 +123,7 @@ module Ref = struct
 
   let to_git = function
     | `Ref head -> head
-    | `PR id -> Fmt.str "refs/pull/%d/head" id
+    | `PR id -> Fmt.str "refs/merge-requests/%d/head" id
 end
 
 module Ref_map = Map.Make(Ref)
@@ -199,8 +231,8 @@ let get_commit project_id =
   Project.by_id ~project_id () >>~ function
   | None ->
     fail (Project_not_found project_id)
-  | Some project ->
-    Project.Commit.commits ~project_id:project.Gitlab_t.project_short_id ~ref_name:project.project_short_default_branch ()
+  | Some (project : Gitlab_t.project_short) ->
+    Project.Commit.commits ~project_id:project.project_short_id ~ref_name:project.project_short_default_branch ()
     |> Stream.next
     >|= fun x ->
     Option.map (fun (x,_) -> (x, project.project_short_default_branch)) x
@@ -339,7 +371,9 @@ module Commit = struct
 
   let compare (_, a) (_, b) = Commit_id.compare a b
 
-  let repo_id ((_,t) : 'a * Commit_id.t) : Repo_id.t = t.Commit_id.repo
+  let owner_name (_,t) = Commit_id.owner_name t
+
+  let repo_id (_,t) = t.Commit_id.repo
 
   let hash (_, id) = id.Commit_id.hash
 
@@ -353,64 +387,6 @@ module Commit = struct
     and> status = status in
     Set_status_cache.set t {Set_status.Key.commit; context} status
 end
-
-(* TODO Build this up as a REST Query, then try to optimise to GraphQL.
-*)
-(* type query_result = { *)
-(*   default_branch: Gitlab_t.branch_full; *)
-(*   branches: Gitlab_t.branch_full list; *)
-(*   merge_requests: Gitlab_t.merge_request list; *)
-(* } *)
-
-(* See https://gitlab.com/-/graphql-explorer *)
-(* let query_merge_requests_branch = {| *)
-(* # Query rootRef, branches and all open merge requests *)
-(* query default_and_merge_requests($name: ID!) { *)
-
-(*   project(fullPath: $name) { *)
-(*     name *)
-(*     nameWithNamespace *)
-(*     id *)
-(*     repository { *)
-(*       rootRef *)
-(*       branchNames(searchPattern: "*", offset:0, limit:100) *)
-(*     } *)
-
-(*     mergeRequests(state:opened) { *)
-(*       count *)
-(*       edges { *)
-(*         node { *)
-(*           state *)
-(*           iid *)
-(*           targetBranch *)
-(*           sourceBranch *)
-(*           diffHeadSha *)
-(*           commitsWithoutMergeCommits(first:1) { *)
-(*             nodes { *)
-(*               sha *)
-(*               authoredDate *)
-(*             } *)
-(*           } *)
-(*         } *)
-(*       } *)
-(*     } *)
-(*   } *)
-(* } *)
-
-(* # Query a particular branch's last commit, with authoredDate *)
-(* query branch_commits($name: ID!, $branch: String) { *)
-(*   project(fullPath: $name) { *)
-(*     repository { *)
-(*       tree(ref:$branch) { *)
-(*         lastCommit { *)
-(*         sha *)
-(*         authoredDate *)
-(*       } *)
-(*       } *)
-(*     } *)
-(*   } *)
-(* } *)
-(* |} *)
 
 let query_branches token project_id =
   let open Gitlab in
@@ -447,6 +423,14 @@ let get_refs t (repo : Repo_id.t) =
     let refs = List.map (parse_ref ~repo ~prefix) branches in
     let prs = List.map (parse_merge_request ~repo) prs in
     let default_ref = default_branch.Gitlab_t.branch_full_name in
+
+    (* Record metrics for monitoring. *)
+    let n_branches = List.length branches in
+    let n_prs = List.length prs in
+    Prometheus.Gauge.set (Prometheus.Gauge.labels Metrics.refs_total [repo.owner; repo.name]) (float_of_int n_branches);
+    Prometheus.Gauge.set (Prometheus.Gauge.labels Metrics.prs_total [repo.owner; repo.name]) (float_of_int n_prs);
+
+    (* Build a Ref_map of the merge_requests and git refs. *)
     let add xs map = List.fold_left (fun acc x -> Ref_map.add x.Commit_id.id (t, x) acc) map xs in
     Ref_map.empty
     |> add refs
@@ -564,7 +548,7 @@ module Anonymous = struct
       let project_id = repo.project_id in
       match gref with
       | `Ref the_ref ->
-        Project.Commit.commits ~project_id ~ref_name:(the_ref) () |> Stream.next
+        Project.Commit.commits ~project_id ~ref_name:the_ref () |> Stream.next
         >|= fun x -> Option.map (fun (x,_) -> x.Gitlab_t.commit_id) x |> Option.get
       | `PR pr_no ->
         Project.merge_request ~project_id ~merge_request_iid:(string_of_int pr_no) () >>~ fun x ->

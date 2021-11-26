@@ -1,9 +1,6 @@
 (** Integration with GitLab {{:https://docs.gitlab.com/ee/user/project/integrations/webhooks.html}Webhooks}. *)
 
-val webhook : engine:Current.Engine.t
-              -> webhook_secret:string
-              -> has_role:(Current_web.User.t option -> Current_web.Role.t -> bool)
-              -> Current_web.Resource.t
+val webhook : webhook_secret:string -> Current_web.Resource.t
 (** GitLab webhook endpoint.
 
 To trigger events this MUST be added to {! Current_web.routes }. This webhook handles the events:

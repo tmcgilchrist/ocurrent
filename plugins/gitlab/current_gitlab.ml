@@ -21,7 +21,7 @@ let validate_webhook webhook_secret headers =
   let request_header = Option.value ~default:"<empty>" @@ Cohttp.Header.get headers "X-Gitlab-Token" in
   Eqaf.equal request_header webhook_secret
 
-let webhook ~engine:_ ~webhook_secret ~has_role:_ = object
+let webhook ~webhook_secret = object
     inherit Current_web.Resource.t
 
     method! post_raw _site req body =
@@ -38,10 +38,11 @@ let webhook ~engine:_ ~webhook_secret ~has_role:_ = object
       | true ->
          begin match event with
          | Some "Merge Request Hook" | Some "Push Hook" ->
-           (match Gitlab_j.webhook_of_string body with
+           begin match Gitlab_j.webhook_of_string body with
             | `MergeRequest _ as x -> Api.input_webhook x
             | `Push _ as x -> Api.input_webhook x
-            | x -> Log.warn (fun f -> f "Unknown GitHub event type %S" (Gitlab_j.string_of_webhook x)))
+            | x -> Log.warn (fun f -> f "Unknown GitHub event type %S" (Gitlab_j.string_of_webhook x))
+           end
          | Some x -> Log.warn (fun f -> f "Unknown GitHub event type %S" x)
          | None -> Log.warn (fun f -> f "Missing GitHub event type in webhook!")
          end;

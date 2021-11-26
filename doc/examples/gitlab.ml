@@ -29,30 +29,30 @@ let dockerfile ~base =
 
 let weekly = Current_cache.Schedule.v ~valid_for:(Duration.of_day 7) ()
 
-let github_status_of_state = function
+let gitlab_status_of_state = function
   | Ok _              -> Gitlab.Api.Status.v ~url `Success ~description:"Passed" ~name:program_name
   | Error (`Active _) -> Gitlab.Api.Status.v ~url `Pending ~name:program_name
   | Error (`Msg m)    -> Gitlab.Api.Status.v ~url `Failure ~description:m ~name:program_name
 
-let pipeline ~github ~repo_id () =
+let pipeline ~gitlab ~repo_id () =
   let dockerfile =
     let+ base = Docker.pull ~schedule:weekly "ocaml/opam:alpine-3.13-ocaml-4.08" in
     `Contents (dockerfile ~base)
   in
-  Gitlab.Api.ci_refs github ~staleness:(Duration.of_day 90) repo_id
+  Gitlab.Api.ci_refs gitlab ~staleness:(Duration.of_day 90) repo_id
   |> Current.list_iter (module Gitlab.Api.Commit) @@ fun head ->
   let src = Git.fetch (Current.map Gitlab.Api.Commit.id head) in
 
   Docker.build ~pool ~pull:false ~dockerfile (`Git src)
   |> Current.state
-  |> Current.map github_status_of_state
+  |> Current.map gitlab_status_of_state
   |> Gitlab.Api.Commit.set_status head program_name
 
-let main config mode github repo =
+let main config mode gitlab repo =
   let has_role = Current_web.Site.allow_all in
-  let engine = Current.Engine.create ~config (pipeline ~github ~repo_id:repo) in
+  let engine = Current.Engine.create ~config (pipeline ~gitlab ~repo_id:repo) in
   let routes =
-    Routes.(s "webhooks" / s "gitlab" /? nil @--> Gitlab.webhook ~engine ~webhook_secret:(Gitlab.Api.webhook_secret github) ~has_role) ::
+    Routes.(s "webhooks" / s "gitlab" /? nil @--> Gitlab.webhook ~webhook_secret:(Gitlab.Api.webhook_secret gitlab)) ::
     Current_web.routes engine
   in
   let site = Current_web.Site.(v ~has_role) ~name:program_name routes in

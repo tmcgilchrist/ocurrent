@@ -23,7 +23,7 @@ module Repo_id : sig
 
   val compare : t -> t -> int
 
-  val cmdliner : t Cmdliner.Arg.conv
+  val cmdliner : t Cmdliner.Term.t
   (** Cmdliner parser for reading a repo_id as a string.
       Expected format is "owner/name/project_id"
   *)
@@ -40,7 +40,7 @@ module Api : sig
   type refs
   (** Reference information for the Repository. *)
 
-  (** Status associated with an single [Commit.t]. *)
+  (** Status associated with a single [Commit.t]. *)
   module Status : sig
     type t
     (** GitLab commit context status type. *)

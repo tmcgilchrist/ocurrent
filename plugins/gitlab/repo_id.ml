@@ -17,4 +17,9 @@ let cmdliner =
     | [ owner; name; project_id ] -> Ok { owner; name; project_id=int_of_string project_id }
     | _ -> Error (`Msg (Fmt.str "%S not in the form 'owner/name/project_id'" s))
   in
-  Arg.conv ~docv:"REPO" (parse, pp)
+  Arg.required @@
+  Arg.pos 0 (Arg.some (Arg.conv ~docv:"REPO" (parse, pp))) None @@
+  Arg.info
+    ~doc:"The GitLab repository (owner/name/project_id) to monitor."
+    ~docv:"REPO"
+    []

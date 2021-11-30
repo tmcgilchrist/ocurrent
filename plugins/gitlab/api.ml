@@ -41,23 +41,6 @@ module Metrics = struct
     Gauge.v_labels ~label_names:["account"; "name"] ~help ~namespace ~subsystem "prs_total"
 end
 
-(* GitLab responds with 429 Too Many Requests *)
-(* HTTP Headers on responses of: *)
-(* < ratelimit-observed: 3
-   < ratelimit-remaining: 1997
-   < ratelimit-reset: 1636698938
-   < ratelimit-resettime: Fri, 12 Nov 2021 06:35:38 GMT
-   < ratelimit-limit: 2000
-*)
-(* let handle_rate_limit t name json = *)
-(*   let open Yojson.Safe.Util in *)
-(*   let cost = json / "cost" |> to_int in *)
-(*   let remaining = json / "remaining" |> to_int in *)
-(*   let reset_at = json / "resetAt" |> to_string in *)
-(*   Log.info (fun f -> f "GraphQL(%s): cost:%d remaining:%d resetAt:%s" name cost remaining reset_at); *)
-(*   Prometheus.Counter.inc (Metrics.used_points_total t.account) (float_of_int cost); *)
-(*   Prometheus.Gauge.set (Metrics.remaining_points t.account) (float_of_int remaining) *)
-
 let read_file path =
   let ch = open_in_bin path in
   Fun.protect
@@ -67,7 +50,6 @@ let read_file path =
     )
     ~finally:(fun () -> close_in ch)
 
-(* TODO Rework how we get a token. *)
 type token = {
   token : (string, [`Msg of string]) result;
   expiry : float option;
@@ -100,9 +82,8 @@ module Status = struct
     | `Pending -> "pending"
     | `Success -> "success"
 
-  (* TODO JSON version of this might be unnecessary! *)
   let json_items { state; name; description; url } =
-    ["state", `String (state_to_string state)
+    [ "state", `String (state_to_string state)
     ; "name", `String name] @
     (match description with None -> [] | Some x -> ["description", `String x]) @
     (match url with None -> [] | Some x -> ["target_url", `String (Uri.to_string x)])
@@ -167,7 +148,7 @@ end
 type t = {
   account : string;          (* Prometheus label used to report points. *)
   get_token : unit -> token Lwt.t;
-  webhook_secret : string; (* Shared secret for validating webhooks from GitLab *)
+  webhook_secret : string;  (* Shared secret for validating webhooks from GitLab *)
   token_lock : Lwt_mutex.t;
   mutable token : token;
   mutable head_monitors : commit Current.Monitor.t Repo_map.t;
@@ -241,7 +222,6 @@ let get_commit project_id =
     | Some x -> x
 
 (* Get latest Git ref for the default branch in GitLab? *)
-(* TODO Handle rate limiting? via get_token t >>= use token *)
 let get_default_ref _t (repo_id : Repo_id.t) =
   let prefix = "refs/heads/" in
   Gitlab.Monad.run (get_commit repo_id.project_id) >>= fun (c, branch_name) ->
@@ -347,9 +327,16 @@ module Commit = struct
               let token = Token.of_string token in
               let sha = commit.Commit_id.hash in
               let project_id = commit.repo.project_id in
-              Project.Commit.status ~token ~project_id ~sha
-                ~state:(state_to_gitlab status.Status.state) ~name:id
-                ?target_url:(Option.map Uri.to_string status.Status.url) ()
+              let new_status =
+                { Gitlab_t.state = (state_to_gitlab status.Status.state)
+                ; name = Some id
+                ; target_url = (Option.map Uri.to_string status.Status.url)
+                ; ref_name = None
+                ; description = None
+                ; coverage = None
+                ; pipeline_id = None
+                } in
+              Project.Commit.status ~token ~project_id ~sha new_status ()
               >>~ fun resp -> return resp)
           )
           (fun (_ : Gitlab_t.commit_status) -> Lwt_result.return ())
@@ -441,7 +428,7 @@ let make_refs_monitor t repo =
   let read () =
     Lwt.catch
       (fun () -> get_refs t repo >|= Stdlib.Result.ok)
-      (fun ex -> Lwt_result.fail @@ `Msg (Fmt.str "GitHub query for %a failed: %a" Repo_id.pp repo Fmt.exn ex))
+      (fun ex -> Lwt_result.fail @@ `Msg (Fmt.str "GitLab query for %a failed: %a" Repo_id.pp repo Fmt.exn ex))
   in
   let watch refresh =
     let owner_name = Fmt.str "%a" Repo_id.to_git repo in
@@ -566,7 +553,7 @@ module Anonymous = struct
           Lwt_result.return (Commit_id.to_git id)
         )
         (fun ex ->
-           Log.warn (fun f -> f "GitHub query_head failed: %a" Fmt.exn ex);
+           Log.warn (fun f -> f "GitLab query_head failed: %a" Fmt.exn ex);
            Lwt_result.fail (`Msg (Fmt.str "Failed to get head of %a:%a" Repo_id.pp repo Ref.pp gref))
         )
     in
@@ -596,7 +583,6 @@ module Anonymous = struct
     Current.Monitor.get monitor
 end
 
-(* TODO oauth token for api requests. *)
 open Cmdliner
 
 let token_file =

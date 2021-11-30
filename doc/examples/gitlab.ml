@@ -67,17 +67,9 @@ let main config mode gitlab repo =
 
 open Cmdliner
 
-let repo =
-  Arg.required @@
-  Arg.pos 0 (Arg.some Gitlab.Repo_id.cmdliner) None @@
-  Arg.info
-    ~doc:"The GitLab repository (owner/name/project_id) to monitor."
-    ~docv:"REPO"
-    []
-
 let cmd =
   let doc = "Monitor a GitLab repository." in
-  Term.(term_result (const main $ Current.Config.cmdliner $ Current_web.cmdliner $ Current_gitlab.Api.cmdliner $ repo)),
+  Term.(term_result (const main $ Current.Config.cmdliner $ Current_web.cmdliner $ Current_gitlab.Api.cmdliner $ Current_gitlab.Repo_id.cmdliner)),
   Term.info program_name ~doc
 
 let () = Term.(exit @@ eval cmd)

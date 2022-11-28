@@ -84,6 +84,13 @@ module Api : sig
 
     val uri : t -> Uri.t
     (** [uri t] is a URI for the GitLab web page showing [t]. *)
+
+    val mr_name : t -> string option
+    (** [mr_name t] is the name of the ref that the commit belongs to if it is a MR, and None if it is a branch *)
+
+    val branch_name : t -> string option
+    (** [branch_name t] is the name of the ref that the commit belongs to if it is a branch, and None if it is a PR *)
+
   end
 
   (** A Project's repository on GitLab. *)
